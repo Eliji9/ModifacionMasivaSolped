@@ -69,7 +69,7 @@ Tip: crear `ZR_SOLPED_UP` y `ZR_SOLPED_LOG` juntas (se referencian entre sí) y 
 Los nombres siguientes se tomaron de la API estándar de solicitudes de pedido; confirmarlos en el sistema del cliente:
 
 1. **BDEF `I_PurchaseRequisitionTP`**: alias de entidades `PurchaseRequisition`, `PurchaseRequisitionItem`,
-   `PurchaseReqnAcctAssgmt` y la asociación ítem → imputación `_PurchaseReqnAcctAssgmt`.
+   `PurReqnItmAccountAssignment` (confirmado) y la asociación ítem → imputación `_PurchaseReqnAcctAssgmt` (confirmado).
 2. Campos de imputación en `I_PurchaseReqnAcctAssgmtTP`: `MasterFixedAsset`, `FixedAsset`, `Quantity`.
 3. Campos de `I_PurchaseRequisitionItemAPI01`: `PurchaseRequisitionType`, `AccountAssignmentCategory`, `CompanyCode`,
    `RequestedQuantity`, `OrderedQuantity`, `PurchasingDocument`, `ProcessingStatus`, `IsDeleted`, `IsClosed`.
