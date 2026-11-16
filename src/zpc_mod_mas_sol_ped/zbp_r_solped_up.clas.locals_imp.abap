@@ -1,6 +1,24 @@
 *"* Implementación del comportamiento de ZR_SOLPED_UP
 *"* (pestaña "Local Types" del behavior pool ZBP_R_SOLPED_UP)
 
+"! Buffer de la transacción: posiciones aprobadas por SAP en Procesar, que el
+"! saver graba con BAPI_PR_CHANGE (RAP hace el COMMIT).
+CLASS lcl_buffer DEFINITION FINAL.
+  PUBLIC SECTION.
+    TYPES:
+      BEGIN OF ty_pending,
+        upload_uuid TYPE sysuuid_x16,
+        banfn       TYPE zcl_solped_imput_proc=>ty_banfn,
+        data        TYPE zif_mm_pr_change_api=>ty_data,
+      END OF ty_pending,
+      tt_pending TYPE STANDARD TABLE OF ty_pending WITH EMPTY KEY.
+    CLASS-DATA mt_pending TYPE tt_pending.
+ENDCLASS.
+
+CLASS lcl_buffer IMPLEMENTATION.
+ENDCLASS.
+
+
 CLASS lhc_upload DEFINITION INHERITING FROM cl_abap_behavior_handler.
 
   PRIVATE SECTION.
@@ -9,7 +27,6 @@ CLASS lhc_upload DEFINITION INHERITING FROM cl_abap_behavior_handler.
       BEGIN OF c_status,
         new         TYPE c LENGTH 1 VALUE 'N',
         simulated   TYPE c LENGTH 1 VALUE 'S',
-        running     TYPE c LENGTH 1 VALUE 'R',
         processed   TYPE c LENGTH 1 VALUE 'P',
         with_errors TYPE c LENGTH 1 VALUE 'E',
       END OF c_status,
@@ -38,7 +55,7 @@ CLASS lhc_upload DEFINITION INHERITING FROM cl_abap_behavior_handler.
     METHODS procesar FOR MODIFY
       IMPORTING keys FOR ACTION Upload~procesar RESULT result.
 
-    "! Simular: lee, valida y prueba la BAPI (TESTRUN); deja resumen y log
+    "! Simular / Procesar: lee, valida y prueba la BAPI (TESTRUN); deja resumen y log
     METHODS run
       IMPORTING it_keys TYPE tt_upload_keys
                 iv_test TYPE abap_bool.
@@ -71,19 +88,17 @@ CLASS lhc_upload IMPLEMENTATION.
         RESULT DATA(lt_upload)
       FAILED failed.
 
-    " Simular / Procesar solo con archivo cargado, sin proceso en curso y
-    " mientras no se haya procesado completo sin errores.
+    " Simular / Procesar solo con archivo cargado y mientras no se haya
+    " procesado completo sin errores.
     " Procesar solo sobre la instancia activa (no sobre el borrador).
     result = VALUE #( FOR ls_upload IN lt_upload
                       ( %tky             = ls_upload-%tky
                         %action-simular  = COND #( WHEN ls_upload-FileName IS INITIAL
                                                      OR ls_upload-Status = c_status-processed
-                                                     OR ls_upload-Status = c_status-running
                                                    THEN if_abap_behv=>fc-o-disabled
                                                    ELSE if_abap_behv=>fc-o-enabled )
                         %action-procesar = COND #( WHEN ls_upload-FileName IS INITIAL
                                                      OR ls_upload-Status = c_status-processed
-                                                     OR ls_upload-Status = c_status-running
                                                      OR ls_upload-%is_draft = if_abap_behv=>mk-on
                                                    THEN if_abap_behv=>fc-o-disabled
                                                    ELSE if_abap_behv=>fc-o-enabled ) ) ).
@@ -168,36 +183,27 @@ CLASS lhc_upload IMPLEMENTATION.
 
 
   METHOD procesar.
-    " La acción NO modifica la solped ni hace COMMIT: borra el log anterior y deja
-    " la carga "En proceso". El saver (save_modified) registra la operación bgPF
-    " ZCL_SOLPED_IMPUT_BGPF, que modifica la solped con BAPI_PR_CHANGE posición
-    " por posición (COMMIT / ROLLBACK) y graba el log.
-    delete_old_log( CORRESPONDING #( keys ) ).
-
-    MODIFY ENTITIES OF zr_solped_up IN LOCAL MODE
-      ENTITY Upload
-        UPDATE FIELDS ( Status RunMode TotalItems OkItems ErrorItems )
-        WITH VALUE #( FOR ls_key IN keys
-                      ( %tky       = ls_key-%tky
-                        Status     = c_status-running
-                        RunMode    = c_mode-real
-                        TotalItems = 0
-                        OkItems    = 0
-                        ErrorItems = 0 ) ).
-
-    LOOP AT keys INTO DATA(ls_key_msg).
-      " Máximo 50 caracteres y severidad informativa
-      APPEND VALUE #( %tky = ls_key_msg-%tky
-                      %msg = new_message_with_text(
-                               severity = if_abap_behv_message=>severity-information
-                               text     = `En proceso. Actualice en unos segundos` ) )
-        TO reported-upload.
-    ENDLOOP.
+    " Prueba con SAP (TESTRUN) y deja en lcl_buffer las posiciones aprobadas.
+    " El saver (save_modified) las graba con BAPI_PR_CHANGE; RAP hace el COMMIT.
+    run( it_keys = CORRESPONDING #( keys )
+         iv_test = abap_false ).
 
     READ ENTITIES OF zr_solped_up IN LOCAL MODE
       ENTITY Upload
         ALL FIELDS WITH CORRESPONDING #( keys )
         RESULT DATA(lt_upload).
+
+    " Mensaje resumen para el usuario (máx. 50 caracteres, severidad informativa)
+    LOOP AT lt_upload INTO DATA(ls_msg).
+      APPEND VALUE #( %tky = ls_msg-%tky
+                      %msg = new_message_with_text(
+                               severity = COND #( WHEN ls_msg-ErrorItems > 0 OR ls_msg-TotalItems = 0
+                                                  THEN if_abap_behv_message=>severity-information
+                                                  ELSE if_abap_behv_message=>severity-success )
+                               text     = |Solped { CONV string( ls_msg-PurchaseRequisition ) ALPHA = OUT }: | &&
+                                          |{ ls_msg-OkItems } OK, { ls_msg-ErrorItems } con error. Ver log| ) )
+        TO reported-upload.
+    ENDLOOP.
 
     result = VALUE #( FOR ls_upload IN lt_upload
                       ( %tky   = ls_upload-%tky
@@ -235,13 +241,22 @@ CLASS lhc_upload IMPLEMENTATION.
 
     LOOP AT lt_upload INTO DATA(ls_upload).
 
-      " Lectura del Excel, validaciones y prueba de BAPI_PR_CHANGE (TESTRUN)
+      " Lectura del Excel, validaciones y prueba con BAPI_PR_CHANGE (TESTRUN)
       DATA(lo_processor) = NEW zcl_solped_imput_proc( ).
       lo_processor->execute( EXPORTING iv_file    = ls_upload-FileContent
                                        iv_test    = iv_test
                              IMPORTING ev_banfn   = DATA(lv_banfn)
                                        et_log     = DATA(lt_log)
-                                       es_summary = DATA(ls_summary) ).
+                                       es_summary = DATA(ls_summary)
+                                       es_bapi_data = DATA(ls_bapi_data) ).
+
+      " Procesar: posiciones aprobadas para grabar en el saver
+      IF iv_test = abap_false AND ls_bapi_data-item IS NOT INITIAL.
+        DELETE lcl_buffer=>mt_pending WHERE upload_uuid = ls_upload-UploadUuid.
+        APPEND VALUE #( upload_uuid = ls_upload-UploadUuid
+                        banfn       = lv_banfn
+                        data        = ls_bapi_data ) TO lcl_buffer=>mt_pending.
+      ENDIF.
 
       DATA(lv_has_error) = xsdbool( line_exists( lt_log[ msg_type = 'E' ] ) ).
 
@@ -289,12 +304,14 @@ CLASS lhc_upload IMPLEMENTATION.
 ENDCLASS.
 
 
-"! Saver: registra el procesamiento en segundo plano (bgPF) al grabar.
-"! save_for_execution debe llamarse en la fase de grabado, nunca en la acción.
+"! Saver: graba con BAPI_PR_CHANGE las posiciones aprobadas en Procesar.
+"! La BAPI deja el cambio en la tarea de actualización y el COMMIT lo hace RAP
+"! (no se llama BAPI_TRANSACTION_COMMIT ni COMMIT WORK).
 CLASS lsc_zr_solped_up DEFINITION INHERITING FROM cl_abap_behavior_saver.
 
   PROTECTED SECTION.
     METHODS save_modified REDEFINITION.
+    METHODS cleanup       REDEFINITION.
 
 ENDCLASS.
 
@@ -302,22 +319,50 @@ ENDCLASS.
 CLASS lsc_zr_solped_up IMPLEMENTATION.
 
   METHOD save_modified.
-    LOOP AT update-upload INTO DATA(ls_upload)
-         WHERE %control-Status = if_abap_behv=>mk-on
-           AND Status          = 'R'.
-      TRY.
-          DATA(lo_process) = cl_bgmc_process_factory=>get_default( )->create( ).
-          lo_process->set_name( 'Modificación masiva solped' ).
-          lo_process->set_operation_tx_uncontrolled( NEW zcl_solped_imput_bgpf( ls_upload-UploadUuid ) ).
-          lo_process->save_for_execution( ).
-        CATCH cx_bgmc INTO DATA(lx_bgmc).
-          APPEND VALUE #( UploadUuid = ls_upload-UploadUuid
-                          %msg       = new_message_with_text(
-                                         severity = if_abap_behv_message=>severity-error
-                                         text     = |No se pudo iniciar el proceso: { lx_bgmc->get_text( ) }| ) )
-            TO reported-upload.
-      ENDTRY.
+    DATA lv_now TYPE timestampl.
+
+    LOOP AT lcl_buffer=>mt_pending INTO DATA(ls_pending).
+      DATA(ls_data) = ls_pending-data.
+      DATA(lt_return) = zcl_mm_pr_change_api_fact=>create_instance( )->change(
+                          EXPORTING iv_number  = ls_pending-banfn
+                                    iv_testrun = abap_false
+                          CHANGING  cs_data    = ls_data ).
+
+      " Caso excepcional: la prueba pasó pero la llamada real devolvió error.
+      " La BAPI no deja nada pendiente; se informa en pantalla y en el log.
+      LOOP AT lt_return INTO DATA(ls_ret) WHERE type CA 'EA'.
+        APPEND VALUE #( UploadUuid = ls_pending-upload_uuid
+                        %msg       = new_message_with_text(
+                                       severity = if_abap_behv_message=>severity-error
+                                       text     = ls_ret-message ) ) TO reported-upload.
+
+        GET TIME STAMP FIELD lv_now.
+        TRY.
+            INSERT ztmm_solped_lg FROM @( VALUE ztmm_solped_lg(
+              log_uuid             = cl_system_uuid=>create_uuid_x16_static( )
+              upload_uuid          = ls_pending-upload_uuid
+              row_no               = 1
+              purchase_requisition = ls_pending-banfn
+              step                 = 'M'
+              msg_type             = 'E'
+              msg_origin           = 'S'
+              msg_id               = ls_ret-id
+              msg_no               = ls_ret-number
+              message              = |No se grabó la solped: { ls_ret-message }|
+              local_created_by     = cl_abap_context_info=>get_user_technical_name( )
+              local_created_at     = lv_now
+              local_last_changed_at = lv_now ) ).
+          CATCH cx_uuid_error.
+        ENDTRY.
+      ENDLOOP.
     ENDLOOP.
+
+    CLEAR lcl_buffer=>mt_pending.
+  ENDMETHOD.
+
+
+  METHOD cleanup.
+    CLEAR lcl_buffer=>mt_pending.
   ENDMETHOD.
 
 ENDCLASS.

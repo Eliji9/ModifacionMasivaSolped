@@ -16,20 +16,18 @@ define root view entity ZR_SOLPED_UP
       mime_type             as MimeType,
       file_name             as FileName,
 
-      // N = Nueva, S = Simulada, R = En proceso, P = Procesada, E = Procesada con errores
+      // N = Nueva, S = Simulada, P = Procesada, E = Procesada con errores
       status                as Status,
       cast( case status
               when 'E' then 'Procesada con errores'
               when 'N' then 'Nueva'
               when 'S' then 'Simulada'
-              when 'R' then 'En proceso'
               when 'P' then 'Procesada'
               else ''
             end as abap.char( 25 ) )               as StatusText,
       cast( case status
               when 'E' then 1
               when 'S' then 2
-              when 'R' then 2
               when 'P' then 3
               else 0
             end as abap.int1 )                      as StatusCriticality,

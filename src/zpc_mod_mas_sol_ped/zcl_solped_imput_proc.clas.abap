@@ -1,13 +1,9 @@
 "! <p class="shorttext synchronized">Modificación masiva solped: imputación A + activo fijo</p>
 "! Lee el Excel (XCO), valida la solped y sus posiciones con vistas CDS liberadas
-"! y modifica la solped con BAPI_PR_CHANGE a través del wrapper Tier 2
-"! ZIF_MM_PR_CHANGE_API (misma lógica que ME52N).
-"! <ul>
-"! <li>iv_test = X (Simular): una llamada a la BAPI en modo prueba (TESTRUN), sin grabar.
-"!     Se puede llamar desde la acción RAP.</li>
-"! <li>iv_test = space (Procesar): una llamada por posición + COMMIT / ROLLBACK.
-"!     Solo desde la operación bgPF ZCL_SOLPED_IMPUT_BGPF (fuera de la transacción RAP).</li>
-"! </ul>
+"! y prueba el cambio con BAPI_PR_CHANGE en modo prueba (TESTRUN) a través del
+"! wrapper Tier 2 ZIF_MM_PR_CHANGE_API (misma lógica que ME52N).
+"! No graba ni hace COMMIT: devuelve en es_bapi_data las posiciones aprobadas por
+"! SAP; el saver de la app (save_modified) llama la BAPI real y RAP hace el COMMIT.
 CLASS zcl_solped_imput_proc DEFINITION
   PUBLIC
   FINAL
@@ -59,12 +55,15 @@ CLASS zcl_solped_imput_proc DEFINITION
     "! @parameter ev_banfn   | Solped leída del archivo
     "! @parameter et_log     | Log por fila / posición
     "! @parameter es_summary | Totales de posiciones
+    "! @parameter es_bapi_data | Solo si iv_test = space: datos para BAPI_PR_CHANGE
+    "!                           con las posiciones aprobadas en la prueba
     METHODS execute
       IMPORTING iv_file    TYPE xstring
                 iv_test    TYPE abap_bool
       EXPORTING ev_banfn   TYPE ty_banfn
                 et_log     TYPE tt_log
-                es_summary TYPE ty_summary.
+                es_summary TYPE ty_summary
+                es_bapi_data TYPE zif_mm_pr_change_api=>ty_data.
 
   PRIVATE SECTION.
 
@@ -122,6 +121,7 @@ CLASS zcl_solped_imput_proc DEFINITION
     DATA mt_log        TYPE tt_log.
     DATA mt_error_rows TYPE tt_row_set.
     DATA mv_total      TYPE i.
+    DATA ms_bapi_data  TYPE zif_mm_pr_change_api=>ty_data.
 
     METHODS read_excel
       IMPORTING iv_file        TYPE xstring
@@ -175,8 +175,8 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
   METHOD execute.
     DATA lt_rows TYPE tt_row.
 
-    CLEAR: mv_banfn, mt_items, mt_log, mt_error_rows, mv_total,
-           ev_banfn, et_log, es_summary.
+    CLEAR: mv_banfn, mt_items, mt_log, mt_error_rows, mv_total, ms_bapi_data,
+           ev_banfn, et_log, es_summary, es_bapi_data.
 
     " 1. Lectura del Excel
     IF xstrlen( iv_file ) = 0.
@@ -221,6 +221,7 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
     es_summary-total  = mv_total.
     es_summary-errors = lines( mt_error_rows ).
     es_summary-ok     = nmax( val1 = es_summary-total - es_summary-errors val2 = 0 ).
+    es_bapi_data      = ms_bapi_data.
   ENDMETHOD.
 
 
@@ -475,89 +476,63 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
       RETURN.
     ENDIF.
 
+    " ---- Prueba con SAP: BAPI_PR_CHANGE en modo prueba (sin grabar) -------
     DATA(lo_api) = zcl_mm_pr_change_api_fact=>create_instance( ).
+    DATA(ls_data) = build_bapi_data( lt_change ).
+    DATA(lt_return) = lo_api->change( EXPORTING iv_number  = mv_banfn
+                                                iv_testrun = abap_true
+                                      CHANGING  cs_data    = ls_data ).
 
-    " ---- Simular: una sola llamada en modo prueba (como ME52N sin grabar) --
-    IF iv_test = abap_true.
-      DATA(ls_data) = build_bapi_data( lt_change ).
-      DATA(lt_return) = lo_api->change( EXPORTING iv_number  = mv_banfn
-                                                  iv_testrun = abap_true
-                                        CHANGING  cs_data    = ls_data ).
-
-      " Los mensajes de posición traen PARAMETER = PRITEM / PRACCOUNT y ROW =
-      " fila de esa tabla; las tablas se arman en el mismo orden que lt_change.
-      DATA(lv_general_error) = abap_false.
-      LOOP AT lt_return INTO DATA(ls_ret) WHERE type CA 'EAW'.
-        DATA(lv_row) = CONV i( ls_ret-row ).
-        IF ( ls_ret-parameter CS 'PRITEM' OR ls_ret-parameter CS 'PRACCOUNT' )
-           AND lv_row BETWEEN 1 AND lines( lt_change ).
-          add_bapi_message( is_return = ls_ret
-                            is_input  = lt_change[ lv_row ] ).
-        ELSE.
-          add_bapi_message( is_return = ls_ret ).
-          IF ls_ret-type CA 'EA'.
-            lv_general_error = abap_true.
-          ENDIF.
-        ENDIF.
-      ENDLOOP.
-
-      LOOP AT lt_change INTO ls_input.
-        IF line_exists( mt_error_rows[ table_line = ls_input-row_no ] ).
-          CONTINUE.
-        ENDIF.
-        IF lv_general_error = abap_true.
-          add_log( is_input = ls_input
-                   iv_step  = c_step-validation
-                   iv_type  = 'W'
-                   iv_text  = 'Sin errores en la posición, pero SAP devolvió errores de la solped (ver fila 1)' ).
-        ELSE.
-          add_log( is_input = ls_input
-                   iv_step  = c_step-validation
-                   iv_type  = 'S'
-                   iv_text  = |Validación SAP correcta: se cambiaría la imputación { ls_input-acct_cat_old } a A | &&
-                              |con el activo { ls_input-asset ALPHA = OUT }-{ ls_input-subnumber ALPHA = OUT }| ).
-        ENDIF.
-      ENDLOOP.
-      RETURN.
-    ENDIF.
-
-    " ---- Procesar: una posición a la vez, con COMMIT o ROLLBACK -------------
-    " Una posición rechazada por SAP no impide grabar las demás, y el log guarda
-    " el mensaje exacto de SAP (presupuesto, cuenta de mayor, etc.).
-    LOOP AT lt_change INTO ls_input.
-      ls_data = build_bapi_data( VALUE #( ( ls_input ) ) ).
-      lt_return = lo_api->change( EXPORTING iv_number  = mv_banfn
-                                            iv_testrun = abap_false
-                                  CHANGING  cs_data    = ls_data ).
-
-      IF line_exists( lt_return[ type = 'E' ] ) OR line_exists( lt_return[ type = 'A' ] ).
-        lo_api->rollback( ).
-        LOOP AT lt_return INTO ls_ret WHERE type CA 'EAW'.
-          add_bapi_message( is_return = ls_ret
-                            is_input  = ls_input ).
-        ENDLOOP.
-        CONTINUE.
-      ENDIF.
-
-      DATA(ls_commit) = lo_api->commit( ).
-      IF ls_commit-type CA 'EA'.
-        add_bapi_message( is_return = ls_commit
-                          is_input  = ls_input ).
-        CONTINUE.
-      ENDIF.
-
-      " Advertencias de SAP de la posición (informativas)
-      LOOP AT lt_return INTO ls_ret WHERE type = 'W'.
+    " Los mensajes de posición traen PARAMETER = PRITEM / PRACCOUNT y ROW =
+    " fila de esa tabla; las tablas se arman en el mismo orden que lt_change.
+    DATA(lv_general_error) = abap_false.
+    LOOP AT lt_return INTO DATA(ls_ret) WHERE type CA 'EAW'.
+      DATA(lv_row) = CONV i( ls_ret-row ).
+      IF ( ls_ret-parameter CS 'PRITEM' OR ls_ret-parameter CS 'PRACCOUNT' )
+         AND lv_row BETWEEN 1 AND lines( lt_change ).
         add_bapi_message( is_return = ls_ret
-                          is_input  = ls_input ).
-      ENDLOOP.
-
-      add_log( is_input = ls_input
-               iv_step  = c_step-change
-               iv_type  = 'S'
-               iv_text  = |Imputación cambiada de { ls_input-acct_cat_old } a A y activo | &&
-                          |{ ls_input-asset ALPHA = OUT }-{ ls_input-subnumber ALPHA = OUT } asignado| ).
+                          is_input  = lt_change[ lv_row ] ).
+      ELSE.
+        add_bapi_message( is_return = ls_ret ).
+        IF ls_ret-type CA 'EA'.
+          lv_general_error = abap_true.
+        ENDIF.
+      ENDIF.
     ENDLOOP.
+
+    " ---- Resultado por posición --------------------------------------------
+    DATA lt_ok TYPE tt_input.
+    LOOP AT lt_change INTO ls_input.
+      IF line_exists( mt_error_rows[ table_line = ls_input-row_no ] ).
+        CONTINUE.
+      ENDIF.
+
+      IF lv_general_error = abap_true.
+        " SAP devolvió un error sin posición: no se puede saber cuál falla
+        add_log( is_input = ls_input
+                 iv_step  = c_step-validation
+                 iv_type  = COND #( WHEN iv_test = abap_true THEN 'W' ELSE 'E' )
+                 iv_text  = COND #( WHEN iv_test = abap_true
+                                    THEN `Sin errores en la posición, pero SAP devolvió errores de la solped (ver fila 1)`
+                                    ELSE `No se modificó: SAP devolvió errores de la solped (ver fila 1)` ) ).
+        CONTINUE.
+      ENDIF.
+
+      APPEND ls_input TO lt_ok.
+      add_log( is_input = ls_input
+               iv_step  = COND #( WHEN iv_test = abap_true THEN c_step-validation ELSE c_step-change )
+               iv_type  = 'S'
+               iv_text  = COND #( WHEN iv_test = abap_true
+                                  THEN |Validación SAP correcta: se cambiaría la imputación { ls_input-acct_cat_old } a A | &&
+                                       |con el activo { ls_input-asset ALPHA = OUT }-{ ls_input-subnumber ALPHA = OUT }|
+                                  ELSE |Imputación cambiada de { ls_input-acct_cat_old } a A y activo | &&
+                                       |{ ls_input-asset ALPHA = OUT }-{ ls_input-subnumber ALPHA = OUT } asignado| ) ).
+    ENDLOOP.
+
+    " ---- Procesar: posiciones aprobadas para la llamada real (en el saver) --
+    IF iv_test = abap_false AND lt_ok IS NOT INITIAL.
+      ms_bapi_data = build_bapi_data( lt_ok ).
+    ENDIF.
   ENDMETHOD.
 
 
