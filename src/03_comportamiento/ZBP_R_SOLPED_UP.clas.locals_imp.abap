@@ -9,6 +9,7 @@ CLASS lhc_upload DEFINITION INHERITING FROM cl_abap_behavior_handler.
       BEGIN OF c_status,
         new         TYPE c LENGTH 1 VALUE 'N',
         simulated   TYPE c LENGTH 1 VALUE 'S',
+        running     TYPE c LENGTH 1 VALUE 'R',
         processed   TYPE c LENGTH 1 VALUE 'P',
         with_errors TYPE c LENGTH 1 VALUE 'E',
       END OF c_status,
@@ -37,11 +38,14 @@ CLASS lhc_upload DEFINITION INHERITING FROM cl_abap_behavior_handler.
     METHODS procesar FOR MODIFY
       IMPORTING keys FOR ACTION Upload~procesar RESULT result.
 
-    "! Lógica común de simular / procesar
-    METHODS run
+    "! Simulación: lee el archivo, valida y escribe el log (no modifica la solped)
+    METHODS run_simulation
       IMPORTING it_keys     TYPE tt_upload_keys
-                iv_test     TYPE abap_bool
       CHANGING  cs_reported TYPE RESPONSE FOR REPORTED EARLY zr_solped_up.
+
+    "! Borra el log de la ejecución anterior
+    METHODS delete_old_log
+      IMPORTING it_keys TYPE tt_upload_keys.
 
 ENDCLASS.
 
@@ -67,16 +71,20 @@ CLASS lhc_upload IMPLEMENTATION.
         RESULT DATA(lt_upload)
       FAILED failed.
 
-    " Simular / Procesar solo con archivo cargado y mientras no se haya
-    " procesado completamente sin errores.
+    " Simular / Procesar solo con archivo cargado, sin proceso en curso y
+    " mientras no se haya procesado completo sin errores.
+    " Procesar solo sobre la instancia activa (no sobre el borrador).
     result = VALUE #( FOR ls_upload IN lt_upload
                       ( %tky             = ls_upload-%tky
                         %action-simular  = COND #( WHEN ls_upload-FileName IS INITIAL
                                                      OR ls_upload-Status = c_status-processed
+                                                     OR ls_upload-Status = c_status-running
                                                    THEN if_abap_behv=>fc-o-disabled
                                                    ELSE if_abap_behv=>fc-o-enabled )
                         %action-procesar = COND #( WHEN ls_upload-FileName IS INITIAL
                                                      OR ls_upload-Status = c_status-processed
+                                                     OR ls_upload-Status = c_status-running
+                                                     OR ls_upload-%is_draft = if_abap_behv=>mk-on
                                                    THEN if_abap_behv=>fc-o-disabled
                                                    ELSE if_abap_behv=>fc-o-enabled ) ) ).
   ENDMETHOD.
@@ -130,9 +138,8 @@ CLASS lhc_upload IMPLEMENTATION.
 
 
   METHOD simular.
-    run( EXPORTING it_keys     = CORRESPONDING #( keys )
-                   iv_test     = abap_true
-         CHANGING  cs_reported = reported ).
+    run_simulation( EXPORTING it_keys     = CORRESPONDING #( keys )
+                    CHANGING  cs_reported = reported ).
 
     READ ENTITIES OF zr_solped_up IN LOCAL MODE
       ENTITY Upload
@@ -146,9 +153,29 @@ CLASS lhc_upload IMPLEMENTATION.
 
 
   METHOD procesar.
-    run( EXPORTING it_keys     = CORRESPONDING #( keys )
-                   iv_test     = abap_false
-         CHANGING  cs_reported = reported ).
+    " La acción NO modifica la solped ni hace COMMIT: solo deja la carga
+    " "En proceso". El saver (save_modified) registra la operación bgPF
+    " ZCL_SOLPED_IMPUT_BGPF, que modifica la solped y graba el log.
+    delete_old_log( CORRESPONDING #( keys ) ).
+
+    MODIFY ENTITIES OF zr_solped_up IN LOCAL MODE
+      ENTITY Upload
+        UPDATE FIELDS ( Status RunMode TotalItems OkItems ErrorItems )
+        WITH VALUE #( FOR ls_key IN keys
+                      ( %tky       = ls_key-%tky
+                        Status     = c_status-running
+                        RunMode    = c_mode-real
+                        TotalItems = 0
+                        OkItems    = 0
+                        ErrorItems = 0 ) ).
+
+    LOOP AT keys INTO DATA(ls_key_msg).
+      APPEND VALUE #( %tky = ls_key_msg-%tky
+                      %msg = new_message_with_text(
+                               severity = if_abap_behv_message=>severity-information
+                               text     = `Procesamiento iniciado. Actualice la pantalla en unos segundos para ver el log.` ) )
+        TO reported-upload.
+    ENDLOOP.
 
     READ ENTITIES OF zr_solped_up IN LOCAL MODE
       ENTITY Upload
@@ -161,50 +188,51 @@ CLASS lhc_upload IMPLEMENTATION.
   ENDMETHOD.
 
 
-  METHOD run.
-    DATA lv_now    TYPE timestampl.
-    DATA lv_status TYPE c LENGTH 1.
-
-    GET TIME STAMP FIELD lv_now.
-
+  METHOD delete_old_log.
     READ ENTITIES OF zr_solped_up IN LOCAL MODE
-      ENTITY Upload
-        FIELDS ( FileContent FileName ) WITH CORRESPONDING #( it_keys )
-        RESULT DATA(lt_upload)
       ENTITY Upload BY \_Log
         FIELDS ( LogUuid ) WITH CORRESPONDING #( it_keys )
         RESULT DATA(lt_old_log).
 
-    " Cada ejecución reemplaza el log anterior
     IF lt_old_log IS NOT INITIAL.
       MODIFY ENTITIES OF zr_solped_up IN LOCAL MODE
         ENTITY Log
           DELETE FROM VALUE #( FOR ls_old IN lt_old_log ( %tky = ls_old-%tky ) ).
     ENDIF.
+  ENDMETHOD.
+
+
+  METHOD run_simulation.
+    DATA lv_now TYPE timestampl.
+
+    GET TIME STAMP FIELD lv_now.
+
+    delete_old_log( it_keys ).
+
+    READ ENTITIES OF zr_solped_up IN LOCAL MODE
+      ENTITY Upload
+        FIELDS ( FileContent FileName ) WITH CORRESPONDING #( it_keys )
+        RESULT DATA(lt_upload).
 
     LOOP AT lt_upload INTO DATA(ls_upload).
 
-      " Lectura del Excel, validaciones y modificación de la solped (EML)
+      " Lectura del Excel y validaciones (iv_test = X: sin modificar ni grabar)
       DATA(lo_processor) = NEW zcl_solped_imput_proc( ).
       lo_processor->execute( EXPORTING iv_file    = ls_upload-FileContent
-                                       iv_test    = iv_test
+                                       iv_test    = abap_true
                              IMPORTING ev_banfn   = DATA(lv_banfn)
                                        et_log     = DATA(lt_log)
                                        es_summary = DATA(ls_summary) ).
 
       DATA(lv_has_error) = xsdbool( line_exists( lt_log[ msg_type = 'E' ] ) ).
 
-      lv_status = COND #( WHEN iv_test = abap_true    THEN c_status-simulated
-                          WHEN lv_has_error = abap_true THEN c_status-with_errors
-                          ELSE c_status-processed ).
-
       MODIFY ENTITIES OF zr_solped_up IN LOCAL MODE
         ENTITY Upload
           UPDATE FIELDS ( PurchaseRequisition Status RunMode TotalItems OkItems ErrorItems ProcessedAt )
           WITH VALUE #( ( %tky                = ls_upload-%tky
                           PurchaseRequisition = lv_banfn
-                          Status              = lv_status
-                          RunMode             = COND #( WHEN iv_test = abap_true THEN c_mode-test ELSE c_mode-real )
+                          Status              = c_status-simulated
+                          RunMode             = c_mode-test
                           TotalItems          = ls_summary-total
                           OkItems             = ls_summary-ok
                           ErrorItems          = ls_summary-errors
@@ -231,18 +259,49 @@ CLASS lhc_upload IMPLEMENTATION.
                                                MsgNo                   = ls_log-msg_no
                                                Message                 = ls_log-message ) ) ) ).
 
-      " Mensaje resumen para el usuario
       APPEND VALUE #( %tky = ls_upload-%tky
                       %msg = new_message_with_text(
                                severity = COND #( WHEN lv_has_error = abap_true
                                                   THEN if_abap_behv_message=>severity-warning
                                                   ELSE if_abap_behv_message=>severity-success )
-                               text     = COND string(
-                                            WHEN iv_test = abap_true
-                                              THEN |Simulación solped { lv_banfn ALPHA = OUT }: { ls_summary-ok } posiciones correctas, { ls_summary-errors } con error. Revise el log.|
-                                            ELSE |Solped { lv_banfn ALPHA = OUT }: { ls_summary-ok } posiciones modificadas, { ls_summary-errors } con error. Revise el log.| ) ) )
+                               text     = |Simulación solped { lv_banfn ALPHA = OUT }: { ls_summary-ok } posiciones correctas, | &&
+                                          |{ ls_summary-errors } con error. Revise el log.| ) )
         TO cs_reported-upload.
 
+    ENDLOOP.
+  ENDMETHOD.
+
+ENDCLASS.
+
+
+"! Saver: registra el procesamiento en segundo plano (bgPF) al grabar.
+"! save_for_execution debe llamarse en la fase de grabado, nunca en la acción.
+CLASS lsc_zr_solped_up DEFINITION INHERITING FROM cl_abap_behavior_saver.
+
+  PROTECTED SECTION.
+    METHODS save_modified REDEFINITION.
+
+ENDCLASS.
+
+
+CLASS lsc_zr_solped_up IMPLEMENTATION.
+
+  METHOD save_modified.
+    LOOP AT update-upload INTO DATA(ls_upload)
+         WHERE %control-Status = if_abap_behv=>mk-on
+           AND Status          = 'R'.
+      TRY.
+          DATA(lo_process) = cl_bgmc_process_factory=>get_default( )->create( ).
+          lo_process->set_name( 'Modificación masiva solped' ).
+          lo_process->set_operation_tx_uncontrolled( NEW zcl_solped_imput_bgpf( ls_upload-UploadUuid ) ).
+          lo_process->save_for_execution( ).
+        CATCH cx_bgmc INTO DATA(lx_bgmc).
+          APPEND VALUE #( UploadUuid = ls_upload-UploadUuid
+                          %msg       = new_message_with_text(
+                                         severity = if_abap_behv_message=>severity-error
+                                         text     = |No se pudo iniciar el procesamiento en segundo plano: { lx_bgmc->get_text( ) }| ) )
+            TO reported-upload.
+      ENDTRY.
     ENDLOOP.
   ENDMETHOD.
 
