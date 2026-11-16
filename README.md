@@ -7,6 +7,7 @@ cambia el tipo de imputación a **A (Activo fijo)** y asigna el **activo fijo** 
 
 - Diseño de la solución: [`docs/diseno-solucion.md`](docs/diseno-solucion.md)
 - **Objetos y orden de creación:** [`src/README.md`](src/README.md)
+- Archivo de carga de ejemplo: [`ejemplos/solped_40000230.xlsx`](ejemplos/solped_40000230.xlsx)
 
 ## Contexto
 
@@ -61,4 +62,5 @@ el rechazo del grabado completo resulta frecuente.
 ```
 src/zpc_mod_mas_sol_ped/   Objetos ABAP del paquete (copiar y pegar en ADT)
 docs/                      Diseño de la solución
+ejemplos/                  Archivos de carga de ejemplo
 ```
