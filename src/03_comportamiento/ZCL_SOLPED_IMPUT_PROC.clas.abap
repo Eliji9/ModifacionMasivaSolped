@@ -1,11 +1,7 @@
 "! <p class="shorttext synchronized">Modificación masiva solped: imputación A + activo fijo</p>
 "! Lee el Excel (XCO), valida la solped y sus posiciones con vistas CDS liberadas
 "! y modifica la solped con EML sobre el BO estándar I_PurchaseRequisitionTP.
-"! <ul>
-"! <li>iv_test = X (simulación): solo valida, no modifica. Se puede llamar desde la acción RAP.</li>
-"! <li>iv_test = space (real): modifica y hace COMMIT ENTITIES. Solo se llama desde la operación
-"!     bgPF ZCL_SOLPED_IMPUT_BGPF (fuera de la transacción RAP).</li>
-"! </ul>
+"! No hace COMMIT: se llama desde una acción RAP y el framework graba al final.
 CLASS zcl_solped_imput_proc DEFINITION
   PUBLIC
   FINAL
@@ -139,18 +135,6 @@ CLASS zcl_solped_imput_proc DEFINITION
     METHODS change_items
       IMPORTING it_input TYPE tt_input
                 iv_test  TYPE abap_bool.
-
-    "! MODIFY de las posiciones (sin grabar). Devuelve las rechazadas.
-    METHODS apply_changes
-      IMPORTING it_input         TYPE tt_input
-      RETURNING VALUE(rt_failed) TYPE tt_item_set.
-
-    METHODS log_success
-      IMPORTING is_input TYPE ty_input.
-
-    METHODS log_late_messages
-      IMPORTING is_reported TYPE RESPONSE FOR REPORTED LATE i_purchaserequisitiontp
-                is_input    TYPE ty_input.
 
     METHODS normalize
       IMPORTING iv_value        TYPE string
@@ -440,8 +424,13 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
 
 
   METHOD change_items.
-    DATA lt_change TYPE tt_input.
-    DATA lt_failed TYPE tt_item_set.
+    DATA lt_change   TYPE tt_input.
+    DATA lt_failed   TYPE tt_item_set.
+    DATA lv_item     TYPE ty_item_no.
+    DATA lt_upd_item TYPE TABLE FOR UPDATE i_purchaserequisitiontp\\PurchaseRequisitionItem.
+    DATA lt_cba_acct TYPE TABLE FOR CREATE i_purchaserequisitiontp\\PurchaseRequisitionItem\_PurReqnAcctAssgmt.
+    DATA lt_upd_acct TYPE TABLE FOR UPDATE i_purchaserequisitiontp\\PurReqnAcctAssgmt.
+    DATA lt_revert   TYPE TABLE FOR UPDATE i_purchaserequisitiontp\\PurchaseRequisitionItem.
 
     " ---- Simulación: solo validaciones ------------------------------------
     IF iv_test = abap_true.
@@ -455,12 +444,12 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
       RETURN.
     ENDIF.
 
-    " ---- Imputación múltiple: no soportada --------------------------------
+    " ---- 1. Imputaciones actuales de las posiciones -----------------------
     READ ENTITIES OF i_purchaserequisitiontp
       ENTITY PurchaseRequisitionItem BY \_PurReqnAcctAssgmt
-        FIELDS ( MasterFixedAsset ) WITH VALUE #( FOR ls_in IN it_input
-                                                  ( PurchaseRequisition     = mv_banfn
-                                                    PurchaseRequisitionItem = ls_in-item ) )
+        ALL FIELDS WITH VALUE #( FOR ls_in IN it_input
+                                 ( PurchaseRequisition     = mv_banfn
+                                   PurchaseRequisitionItem = ls_in-item ) )
         RESULT DATA(lt_accts).
 
     LOOP AT it_input INTO DATA(ls_input).
@@ -482,81 +471,8 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
       RETURN.
     ENDIF.
 
-    " ---- Intento 1: todas las posiciones en un solo grabado ---------------
-    DATA(lt_log_backup)    = mt_log.
-    DATA(lt_errors_backup) = mt_error_rows.
-
-    lt_failed = apply_changes( lt_change ).
-
-    COMMIT ENTITIES RESPONSE OF i_purchaserequisitiontp
-      FAILED DATA(ls_commit_failed).
-
-    IF sy-subrc = 0 AND ls_commit_failed IS INITIAL.
-      LOOP AT lt_change INTO ls_input.
-        IF NOT line_exists( lt_failed[ table_line = ls_input-item ] ).
-          log_success( ls_input ).
-        ENDIF.
-      ENDLOOP.
-      RETURN.
-    ENDIF.
-
-    ROLLBACK ENTITIES.
-
-    " ---- Intento 2: SAP rechazó el grabado conjunto -> posición por posición
-    "      (una posición con error ya no impide grabar las demás)
-    mt_log        = lt_log_backup.
-    mt_error_rows = lt_errors_backup.
-    add_log( iv_row  = 1
-             iv_step = c_step-change
-             iv_type = 'I'
-             iv_text = 'SAP rechazó el grabado conjunto de la solped; se grabó posición por posición' ).
-
+    " ---- 2. Tipo de imputación A + activo en la línea de imputación -------
     LOOP AT lt_change INTO ls_input.
-      lt_failed = apply_changes( VALUE #( ( ls_input ) ) ).
-      IF lt_failed IS NOT INITIAL.
-        " Rechazada al modificar: el mensaje ya está en el log
-        ROLLBACK ENTITIES.
-        CONTINUE.
-      ENDIF.
-
-      COMMIT ENTITIES RESPONSE OF i_purchaserequisitiontp
-        FAILED   DATA(ls_item_failed)
-        REPORTED DATA(ls_item_reported).
-
-      IF sy-subrc = 0 AND ls_item_failed IS INITIAL.
-        log_success( ls_input ).
-      ELSE.
-        ROLLBACK ENTITIES.
-        log_late_messages( is_reported = ls_item_reported
-                           is_input    = ls_input ).
-        IF NOT line_exists( mt_error_rows[ table_line = ls_input-row_no ] ).
-          add_log( is_input = ls_input
-                   iv_step  = c_step-change
-                   iv_type  = 'E'
-                   iv_text  = 'SAP no permitió grabar la posición; no se modificó' ).
-        ENDIF.
-      ENDIF.
-    ENDLOOP.
-  ENDMETHOD.
-
-
-  METHOD apply_changes.
-    DATA lv_item     TYPE ty_item_no.
-    DATA lt_upd_item TYPE TABLE FOR UPDATE i_purchaserequisitiontp\\PurchaseRequisitionItem.
-    DATA lt_cba_acct TYPE TABLE FOR CREATE i_purchaserequisitiontp\\PurchaseRequisitionItem\_PurReqnAcctAssgmt.
-    DATA lt_upd_acct TYPE TABLE FOR UPDATE i_purchaserequisitiontp\\PurReqnAcctAssgmt.
-    DATA lt_revert   TYPE TABLE FOR UPDATE i_purchaserequisitiontp\\PurchaseRequisitionItem.
-
-    " Línea de imputación actual de cada posición
-    READ ENTITIES OF i_purchaserequisitiontp
-      ENTITY PurchaseRequisitionItem BY \_PurReqnAcctAssgmt
-        ALL FIELDS WITH VALUE #( FOR ls_in IN it_input
-                                 ( PurchaseRequisition     = mv_banfn
-                                   PurchaseRequisitionItem = ls_in-item ) )
-        RESULT DATA(lt_accts).
-
-    " Tipo de imputación A + activo en la línea de imputación
-    LOOP AT it_input INTO DATA(ls_input).
       APPEND VALUE #( PurchaseRequisition       = mv_banfn
                       PurchaseRequisitionItem   = ls_input-item
                       AccountAssignmentCategory = c_acct_cat_asset ) TO lt_upd_item.
@@ -564,12 +480,12 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
       READ TABLE lt_accts INTO DATA(ls_acct)
            WITH KEY PurchaseRequisitionItem = ls_input-item.
       IF sy-subrc = 0.
-        " Ya tiene línea de imputación: se actualiza
+        " La posición ya tiene línea de imputación: se actualiza
         APPEND VALUE #( %tky             = ls_acct-%tky
                         MasterFixedAsset = ls_input-asset
                         FixedAsset       = ls_input-subnumber ) TO lt_upd_acct.
       ELSE.
-        " Sin línea de imputación: se crea por toda la cantidad
+        " Sin línea de imputación: se crea la línea 01 por toda la cantidad
         APPEND VALUE #( PurchaseRequisition     = mv_banfn
                         PurchaseRequisitionItem = ls_input-item
                         %target = VALUE #( ( %cid             = |ACC{ ls_input-item }|
@@ -590,42 +506,44 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
       FAILED DATA(ls_failed)
       REPORTED DATA(ls_reported).
 
-    " Posiciones rechazadas al modificar
+    " ---- 3. Posiciones rechazadas por el BO estándar ----------------------
     LOOP AT ls_failed-purchaserequisitionitem INTO DATA(ls_failed_item).
-      INSERT CONV ty_item_no( ls_failed_item-PurchaseRequisitionItem ) INTO TABLE rt_failed.
+      INSERT CONV ty_item_no( ls_failed_item-PurchaseRequisitionItem ) INTO TABLE lt_failed.
     ENDLOOP.
     LOOP AT ls_failed-purreqnacctassgmt INTO DATA(ls_failed_acct).
       lv_item = COND #( WHEN ls_failed_acct-%cid IS NOT INITIAL
                         THEN substring( val = ls_failed_acct-%cid off = 3 )
                         ELSE ls_failed_acct-PurchaseRequisitionItem ).
-      INSERT lv_item INTO TABLE rt_failed.
+      INSERT lv_item INTO TABLE lt_failed.
     ENDLOOP.
 
-    " A las rechazadas se les devuelve su tipo de imputación original para que
-    " no queden en A sin activo y no bloqueen el grabado de las demás.
-    LOOP AT rt_failed INTO DATA(lv_failed).
-      READ TABLE it_input INTO DATA(ls_failed_input) WITH KEY item = lv_failed.
-      IF sy-subrc = 0.
-        APPEND VALUE #( PurchaseRequisition       = mv_banfn
-                        PurchaseRequisitionItem   = lv_failed
-                        AccountAssignmentCategory = ls_failed_input-acct_cat_old ) TO lt_revert.
+    " Si falló la imputación, se devuelve el tipo de imputación original para
+    " que esa posición no quede en A sin activo (y no bloquee el grabado).
+    IF lt_failed IS NOT INITIAL.
+      LOOP AT lt_failed INTO DATA(lv_failed).
+        READ TABLE lt_change INTO DATA(ls_failed_input) WITH KEY item = lv_failed.
+        IF sy-subrc = 0.
+          APPEND VALUE #( PurchaseRequisition       = mv_banfn
+                          PurchaseRequisitionItem   = lv_failed
+                          AccountAssignmentCategory = ls_failed_input-acct_cat_old ) TO lt_revert.
+        ENDIF.
+      ENDLOOP.
+
+      IF lt_revert IS NOT INITIAL.
+        MODIFY ENTITIES OF i_purchaserequisitiontp
+          ENTITY PurchaseRequisitionItem
+            UPDATE FIELDS ( AccountAssignmentCategory ) WITH lt_revert.
       ENDIF.
-    ENDLOOP.
-    IF lt_revert IS NOT INITIAL.
-      MODIFY ENTITIES OF i_purchaserequisitiontp
-        ENTITY PurchaseRequisitionItem
-          UPDATE FIELDS ( AccountAssignmentCategory ) WITH lt_revert.
     ENDIF.
 
-    " Mensajes del estándar (fase de modificación)
+    " ---- 4. Mensajes del estándar al log -----------------------------------
     LOOP AT ls_reported-purchaserequisition INTO DATA(ls_rep_header).
-      add_sap_message( io_msg   = ls_rep_header-%msg
-                       is_input = COND #( WHEN lines( it_input ) = 1 THEN it_input[ 1 ] ) ).
+      add_sap_message( io_msg = ls_rep_header-%msg ).
     ENDLOOP.
 
     LOOP AT ls_reported-purchaserequisitionitem INTO DATA(ls_rep_item).
       add_sap_message( io_msg   = ls_rep_item-%msg
-                       is_input = VALUE #( it_input[ item = ls_rep_item-PurchaseRequisitionItem ] OPTIONAL ) ).
+                       is_input = VALUE #( lt_change[ item = ls_rep_item-PurchaseRequisitionItem ] OPTIONAL ) ).
     ENDLOOP.
 
     LOOP AT ls_reported-purreqnacctassgmt INTO DATA(ls_rep_acct).
@@ -633,43 +551,30 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
                         THEN substring( val = ls_rep_acct-%cid off = 3 )
                         ELSE ls_rep_acct-PurchaseRequisitionItem ).
       add_sap_message( io_msg   = ls_rep_acct-%msg
-                       is_input = VALUE #( it_input[ item = lv_item ] OPTIONAL ) ).
+                       is_input = VALUE #( lt_change[ item = lv_item ] OPTIONAL ) ).
     ENDLOOP.
 
-    " Rechazadas sin mensaje del estándar
-    LOOP AT rt_failed INTO lv_failed.
-      READ TABLE it_input INTO ls_failed_input WITH KEY item = lv_failed.
-      IF sy-subrc = 0 AND NOT line_exists( mt_error_rows[ table_line = ls_failed_input-row_no ] ).
-        add_log( is_input = ls_failed_input
-                 iv_step  = c_step-change
-                 iv_type  = 'E'
-                 iv_text  = 'SAP rechazó el cambio de la posición; no se modificó' ).
+    " ---- 5. Resultado por posición -----------------------------------------
+    LOOP AT lt_change INTO ls_input.
+      IF line_exists( lt_failed[ table_line = ls_input-item ] ).
+        IF NOT line_exists( mt_error_rows[ table_line = ls_input-row_no ] ).
+          add_log( is_input = ls_input
+                   iv_step  = c_step-change
+                   iv_type  = 'E'
+                   iv_text  = 'SAP rechazó el cambio de la posición; no se modificó' ).
+        ENDIF.
+        CONTINUE.
       ENDIF.
-    ENDLOOP.
-  ENDMETHOD.
 
+      IF line_exists( mt_error_rows[ table_line = ls_input-row_no ] ).
+        CONTINUE.
+      ENDIF.
 
-  METHOD log_success.
-    " Si el estándar devolvió un error para la posición, no se informa como correcta
-    CHECK NOT line_exists( mt_error_rows[ table_line = is_input-row_no ] ).
-
-    add_log( is_input = is_input
-             iv_step  = c_step-change
-             iv_type  = 'S'
-             iv_text  = |Imputación cambiada de { is_input-acct_cat_old } a A y activo | &&
-                        |{ is_input-asset ALPHA = OUT }-{ is_input-subnumber ALPHA = OUT } asignado| ).
-  ENDMETHOD.
-
-
-  METHOD log_late_messages.
-    LOOP AT is_reported-purchaserequisition INTO DATA(ls_header).
-      add_sap_message( io_msg = ls_header-%msg is_input = is_input ).
-    ENDLOOP.
-    LOOP AT is_reported-purchaserequisitionitem INTO DATA(ls_item).
-      add_sap_message( io_msg = ls_item-%msg is_input = is_input ).
-    ENDLOOP.
-    LOOP AT is_reported-purreqnacctassgmt INTO DATA(ls_acct).
-      add_sap_message( io_msg = ls_acct-%msg is_input = is_input ).
+      add_log( is_input = ls_input
+               iv_step  = c_step-change
+               iv_type  = 'S'
+               iv_text  = |Imputación cambiada de { ls_input-acct_cat_old } a A y activo | &&
+                          |{ ls_input-asset ALPHA = OUT }-{ ls_input-subnumber ALPHA = OUT } asignado| ).
     ENDLOOP.
   ENDMETHOD.
 
