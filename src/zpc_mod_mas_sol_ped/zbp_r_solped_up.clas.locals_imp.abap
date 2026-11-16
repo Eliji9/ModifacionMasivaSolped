@@ -311,7 +311,7 @@ CLASS lsc_zr_solped_up DEFINITION INHERITING FROM cl_abap_behavior_saver.
 
   PROTECTED SECTION.
     METHODS save_modified REDEFINITION.
-    METHODS cleanup       REDEFINITION.
+    METHODS cleanup_finalize REDEFINITION.
 
 ENDCLASS.
 
@@ -361,7 +361,7 @@ CLASS lsc_zr_solped_up IMPLEMENTATION.
   ENDMETHOD.
 
 
-  METHOD cleanup.
+  METHOD cleanup_finalize.
     CLEAR lcl_buffer=>mt_pending.
   ENDMETHOD.
 
