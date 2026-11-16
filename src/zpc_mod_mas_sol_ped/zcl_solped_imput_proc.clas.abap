@@ -510,6 +510,22 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
         " Hay línea de imputación: se actualiza con el activo. Se limpian el centro
         " de coste y la cuenta del tipo anterior; SAP deriva la cuenta del activo.
         DATA(ls_acct_now) = lt_acct_now[ 1 ].
+
+        " >>> DIAGNÓSTICO TEMPORAL: qué permite el estándar en la línea de imputación
+        "     (punto de parada en la línea siguiente y revisar ls_perm-instances[ 1 ])
+        GET PERMISSIONS ONLY INSTANCE FEATURES OF i_purchaserequisitiontp
+          ENTITY PurReqnItmAccountAssignment
+            FROM VALUE #( ( %tky = ls_acct_now-%tky ) )
+            REQUEST VALUE #( %update                 = if_abap_behv=>mk-on
+                             %field-MasterFixedAsset = if_abap_behv=>mk-on
+                             %field-FixedAsset       = if_abap_behv=>mk-on
+                             %field-CostCenter       = if_abap_behv=>mk-on
+                             %field-GLAccount        = if_abap_behv=>mk-on )
+            RESULT   DATA(ls_perm)
+            FAILED   DATA(ls_perm_failed)
+            REPORTED DATA(ls_perm_reported).
+        DATA(lv_diag_stop) = abap_true. " <<< punto de parada aquí
+        " <<< FIN DIAGNÓSTICO TEMPORAL
         APPEND VALUE #( %tky             = ls_acct_now-%tky
                         MasterFixedAsset = ls_input-asset
                         FixedAsset       = ls_input-subnumber
