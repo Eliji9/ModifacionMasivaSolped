@@ -2,8 +2,11 @@
 "! Lee el Excel (XCO), valida la solped y sus posiciones con vistas CDS liberadas
 "! y prueba el cambio con BAPI_PR_CHANGE en modo prueba (TESTRUN) a través del
 "! wrapper Tier 2 ZIF_MM_PR_CHANGE_API (misma lógica que ME52N).
-"! No graba ni hace COMMIT: devuelve en es_bapi_data las posiciones aprobadas por
-"! SAP; el saver de la app (save_modified) llama la BAPI real y RAP hace el COMMIT.
+"! No graba ni hace COMMIT.
+"! - Simular: BAPI en modo prueba (TESTRUN) y log con los mensajes de SAP.
+"! - Procesar: SOLO validaciones propias (sin BAPI, para no dejar el documento en
+"!   memoria de la BAPI). Devuelve en es_bapi_data / et_pending las posiciones
+"!   válidas; el saver llama la BAPI real una vez y RAP hace el COMMIT.
 CLASS zcl_solped_imput_proc DEFINITION
   PUBLIC
   FINAL
@@ -56,6 +59,8 @@ CLASS zcl_solped_imput_proc DEFINITION
     "! @parameter et_log     | Log por fila / posición
     "! @parameter es_summary | Totales de posiciones
     "! @parameter es_bapi_data | Solo si iv_test = space: datos para BAPI_PR_CHANGE
+    "! @parameter et_pending   | Solo si iv_test = space: una línea de log por posición
+    "!                           enviada a la BAPI (mismo orden que PRACCOUNT)
     "!                           con las posiciones aprobadas en la prueba
     METHODS execute
       IMPORTING iv_file    TYPE xstring
@@ -63,7 +68,8 @@ CLASS zcl_solped_imput_proc DEFINITION
       EXPORTING ev_banfn   TYPE ty_banfn
                 et_log     TYPE tt_log
                 es_summary TYPE ty_summary
-                es_bapi_data TYPE zif_mm_pr_change_api=>ty_data.
+                es_bapi_data TYPE zif_mm_pr_change_api=>ty_data
+                et_pending   TYPE tt_log.
 
   PRIVATE SECTION.
 
@@ -122,6 +128,7 @@ CLASS zcl_solped_imput_proc DEFINITION
     DATA mt_error_rows TYPE tt_row_set.
     DATA mv_total      TYPE i.
     DATA ms_bapi_data  TYPE zif_mm_pr_change_api=>ty_data.
+    DATA mt_pending    TYPE tt_log.
 
     METHODS read_excel
       IMPORTING iv_file        TYPE xstring
@@ -175,8 +182,8 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
   METHOD execute.
     DATA lt_rows TYPE tt_row.
 
-    CLEAR: mv_banfn, mt_items, mt_log, mt_error_rows, mv_total, ms_bapi_data,
-           ev_banfn, et_log, es_summary, es_bapi_data.
+    CLEAR: mv_banfn, mt_items, mt_log, mt_error_rows, mv_total, ms_bapi_data, mt_pending,
+           ev_banfn, et_log, es_summary, es_bapi_data, et_pending.
 
     " 1. Lectura del Excel
     IF xstrlen( iv_file ) = 0.
@@ -222,6 +229,7 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
     es_summary-errors = lines( mt_error_rows ).
     es_summary-ok     = nmax( val1 = es_summary-total - es_summary-errors val2 = 0 ).
     es_bapi_data      = ms_bapi_data.
+    et_pending        = mt_pending.
   ENDMETHOD.
 
 
@@ -476,7 +484,26 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
       RETURN.
     ENDIF.
 
-    " ---- Prueba con SAP: BAPI_PR_CHANGE en modo prueba (sin grabar) -------
+    " ---- Procesar: sin prueba de BAPI. La BAPI deja el documento en memoria y
+    "      una segunda llamada en la misma petición no grabaría nada. El saver
+    "      llama la BAPI real una sola vez con estas posiciones.
+    IF iv_test = abap_false.
+      ms_bapi_data = build_bapi_data( lt_change ).
+      LOOP AT lt_change INTO ls_input.
+        APPEND VALUE #( row_no               = ls_input-row_no
+                        purchase_requisition = mv_banfn
+                        item                 = |{ CONV i( ls_input-item ) }|
+                        acct_cat_old         = ls_input-acct_cat_old
+                        acct_cat_new         = c_acct_cat_asset
+                        master_fixed_asset   = |{ ls_input-asset ALPHA = OUT }|
+                        fixed_asset          = |{ ls_input-subnumber ALPHA = OUT }|
+                        company_code         = ls_input-company_code
+                        step                 = c_step-change ) TO mt_pending.
+      ENDLOOP.
+      RETURN.
+    ENDIF.
+
+    " ---- Simular: BAPI_PR_CHANGE en modo prueba (sin grabar) ---------------
     DATA(lo_api) = zcl_mm_pr_change_api_fact=>create_instance( ).
     DATA(ls_data) = build_bapi_data( lt_change ).
     DATA(lt_return) = lo_api->change( EXPORTING iv_number  = mv_banfn
@@ -486,6 +513,11 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
     " Los mensajes de posición traen PARAMETER = PRITEM / PRACCOUNT y ROW =
     " fila de esa tabla; las tablas se arman en el mismo orden que lt_change.
     DATA(lv_general_error) = abap_false.
+    " ME 664 (no se pudo modificar un campo) llega como 'I': se trata como error
+    LOOP AT lt_return ASSIGNING FIELD-SYMBOL(<ls_664>) WHERE id = 'ME' AND number = '664'.
+      <ls_664>-type = 'E'.
+    ENDLOOP.
+
     LOOP AT lt_return INTO DATA(ls_ret) WHERE type CA 'EAW'.
       DATA(lv_row) = CONV i( ls_ret-row ).
       IF ( ls_ret-parameter CS 'PRITEM' OR ls_ret-parameter CS 'PRACCOUNT' )
@@ -529,10 +561,6 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
                                        |{ ls_input-asset ALPHA = OUT }-{ ls_input-subnumber ALPHA = OUT } asignado| ) ).
     ENDLOOP.
 
-    " ---- Procesar: posiciones aprobadas para la llamada real (en el saver) --
-    IF iv_test = abap_false AND lt_ok IS NOT INITIAL.
-      ms_bapi_data = build_bapi_data( lt_ok ).
-    ENDIF.
   ENDMETHOD.
 
 

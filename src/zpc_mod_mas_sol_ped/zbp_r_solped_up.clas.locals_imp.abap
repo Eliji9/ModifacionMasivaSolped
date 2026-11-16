@@ -10,6 +10,8 @@ CLASS lcl_buffer DEFINITION FINAL.
         upload_uuid TYPE sysuuid_x16,
         banfn       TYPE zcl_solped_imput_proc=>ty_banfn,
         data        TYPE zif_mm_pr_change_api=>ty_data,
+        log         TYPE zcl_solped_imput_proc=>tt_log,
+        own_errors  TYPE i,
       END OF ty_pending,
       tt_pending TYPE STANDARD TABLE OF ty_pending WITH EMPTY KEY.
     CLASS-DATA mt_pending TYPE tt_pending.
@@ -183,8 +185,9 @@ CLASS lhc_upload IMPLEMENTATION.
 
 
   METHOD procesar.
-    " Prueba con SAP (TESTRUN) y deja en lcl_buffer las posiciones aprobadas.
-    " El saver (save_modified) las graba con BAPI_PR_CHANGE; RAP hace el COMMIT.
+    " Validaciones propias y deja en lcl_buffer las posiciones válidas. El saver
+    " (save_modified) llama BAPI_PR_CHANGE una sola vez, escribe el resultado por
+    " posición en el log y RAP hace el COMMIT.
     run( it_keys = CORRESPONDING #( keys )
          iv_test = abap_false ).
 
@@ -200,8 +203,7 @@ CLASS lhc_upload IMPLEMENTATION.
                                severity = COND #( WHEN ls_msg-ErrorItems > 0 OR ls_msg-TotalItems = 0
                                                   THEN if_abap_behv_message=>severity-information
                                                   ELSE if_abap_behv_message=>severity-success )
-                               text     = |Solped { CONV string( ls_msg-PurchaseRequisition ) ALPHA = OUT }: | &&
-                                          |{ ls_msg-OkItems } OK, { ls_msg-ErrorItems } con error. Ver log| ) )
+                               text     = |Solped { CONV string( ls_msg-PurchaseRequisition ) ALPHA = OUT } procesada. Ver log| ) )
         TO reported-upload.
     ENDLOOP.
 
@@ -248,14 +250,17 @@ CLASS lhc_upload IMPLEMENTATION.
                              IMPORTING ev_banfn   = DATA(lv_banfn)
                                        et_log     = DATA(lt_log)
                                        es_summary = DATA(ls_summary)
-                                       es_bapi_data = DATA(ls_bapi_data) ).
+                                       es_bapi_data = DATA(ls_bapi_data)
+                                       et_pending   = DATA(lt_pending) ).
 
       " Procesar: posiciones aprobadas para grabar en el saver
       IF iv_test = abap_false AND ls_bapi_data-item IS NOT INITIAL.
         DELETE lcl_buffer=>mt_pending WHERE upload_uuid = ls_upload-UploadUuid.
         APPEND VALUE #( upload_uuid = ls_upload-UploadUuid
                         banfn       = lv_banfn
-                        data        = ls_bapi_data ) TO lcl_buffer=>mt_pending.
+                        data        = ls_bapi_data
+                        log         = lt_pending
+                        own_errors  = ls_summary-errors ) TO lcl_buffer=>mt_pending.
       ENDIF.
 
       DATA(lv_has_error) = xsdbool( line_exists( lt_log[ msg_type = 'E' ] ) ).
@@ -319,42 +324,98 @@ ENDCLASS.
 CLASS lsc_zr_solped_up IMPLEMENTATION.
 
   METHOD save_modified.
-    DATA lv_now TYPE timestampl.
+    DATA lv_now     TYPE timestampl.
+    DATA lt_db_log  TYPE STANDARD TABLE OF ztmm_solped_lg WITH EMPTY KEY.
+
+    GET TIME STAMP FIELD lv_now.
+    DATA(lv_user) = cl_abap_context_info=>get_user_technical_name( ).
 
     LOOP AT lcl_buffer=>mt_pending INTO DATA(ls_pending).
+      CLEAR lt_db_log.
       DATA(ls_data) = ls_pending-data.
+
+      " Llamada real (una sola vez). La BAPI deja el cambio en la tarea de
+      " actualización y RAP hace el COMMIT.
       DATA(lt_return) = zcl_mm_pr_change_api_fact=>create_instance( )->change(
                           EXPORTING iv_number  = ls_pending-banfn
                                     iv_testrun = abap_false
                           CHANGING  cs_data    = ls_data ).
 
-      " Caso excepcional: la prueba pasó pero la llamada real devolvió error.
-      " La BAPI no deja nada pendiente; se informa en pantalla y en el log.
-      LOOP AT lt_return INTO DATA(ls_ret) WHERE type CA 'EA'.
-        APPEND VALUE #( UploadUuid = ls_pending-upload_uuid
-                        %msg       = new_message_with_text(
-                                       severity = if_abap_behv_message=>severity-error
-                                       text     = ls_ret-message ) ) TO reported-upload.
+      " ME 664 (no se pudo modificar un campo, p. ej. KNTTP) llega como 'I'
+      LOOP AT lt_return ASSIGNING FIELD-SYMBOL(<ls_ret>) WHERE id = 'ME' AND number = '664'.
+        <ls_ret>-type = 'E'.
+      ENDLOOP.
 
-        GET TIME STAMP FIELD lv_now.
+      " Errores de cabecera: SAP no graba la solped
+      DATA(lv_header_error) = abap_false.
+      LOOP AT lt_return INTO DATA(ls_ret) WHERE type CA 'EA'
+           AND NOT ( parameter CS 'PRITEM' OR parameter CS 'PRACCOUNT' ).
+        lv_header_error = abap_true.
+        APPEND VALUE #( row_no = 1 msg_type = 'E' msg_origin = 'S'
+                        msg_id = ls_ret-id msg_no = ls_ret-number
+                        message = ls_ret-message ) TO lt_db_log.
+      ENDLOOP.
+
+      " Resultado por posición (PRITEM / PRACCOUNT, ROW = orden de envío)
+      DATA(lv_ok)  = 0.
+      DATA(lv_err) = ls_pending-own_errors.
+      LOOP AT ls_pending-log INTO DATA(ls_line).
+        DATA(lv_index) = sy-tabix.
+        DATA(lv_item_error) = lv_header_error.
+
+        LOOP AT lt_return INTO ls_ret
+             WHERE ( parameter CS 'PRITEM' OR parameter CS 'PRACCOUNT' )
+               AND row = lv_index
+               AND type CA 'EAW'.
+          IF ls_ret-type CA 'EA'.
+            lv_item_error = abap_true.
+          ENDIF.
+          DATA(ls_msg_line) = ls_line.
+          ls_msg_line-msg_type   = COND #( WHEN ls_ret-type = 'A' THEN 'E' ELSE ls_ret-type ).
+          ls_msg_line-msg_origin = 'S'.
+          ls_msg_line-msg_id     = ls_ret-id.
+          ls_msg_line-msg_no     = ls_ret-number.
+          ls_msg_line-message    = ls_ret-message.
+          APPEND CORRESPONDING #( ls_msg_line ) TO lt_db_log.
+        ENDLOOP.
+
+        ls_line-msg_origin = 'Z'.
+        IF lv_item_error = abap_true.
+          lv_err += 1.
+          ls_line-msg_type = 'E'.
+          ls_line-message  = 'No se modificó la posición (ver mensaje de SAP)'.
+        ELSE.
+          lv_ok += 1.
+          ls_line-msg_type = 'S'.
+          ls_line-message  = |Imputación cambiada de { ls_line-acct_cat_old } a A y activo | &&
+                             |{ ls_line-master_fixed_asset }-{ ls_line-fixed_asset } asignado|.
+        ENDIF.
+        APPEND CORRESPONDING #( ls_line ) TO lt_db_log.
+      ENDLOOP.
+
+      " Claves y datos administrativos del log
+      LOOP AT lt_db_log ASSIGNING FIELD-SYMBOL(<ls_db>).
         TRY.
-            INSERT ztmm_solped_lg FROM @( VALUE ztmm_solped_lg(
-              log_uuid             = cl_system_uuid=>create_uuid_x16_static( )
-              upload_uuid          = ls_pending-upload_uuid
-              row_no               = 1
-              purchase_requisition = ls_pending-banfn
-              step                 = 'M'
-              msg_type             = 'E'
-              msg_origin           = 'S'
-              msg_id               = ls_ret-id
-              msg_no               = ls_ret-number
-              message              = |No se grabó la solped: { ls_ret-message }|
-              local_created_by     = cl_abap_context_info=>get_user_technical_name( )
-              local_created_at     = lv_now
-              local_last_changed_at = lv_now ) ).
+            <ls_db>-log_uuid = cl_system_uuid=>create_uuid_x16_static( ).
           CATCH cx_uuid_error.
         ENDTRY.
+        <ls_db>-upload_uuid           = ls_pending-upload_uuid.
+        <ls_db>-purchase_requisition  = ls_pending-banfn.
+        <ls_db>-step                  = 'M'.
+        <ls_db>-local_created_by      = lv_user.
+        <ls_db>-local_created_at      = lv_now.
+        <ls_db>-local_last_changed_at = lv_now.
       ENDLOOP.
+      INSERT ztmm_solped_lg FROM TABLE @lt_db_log.
+
+      " Resumen final de la carga
+      DATA lv_status TYPE c LENGTH 1.
+      lv_status = COND #( WHEN lv_err > 0 THEN 'E' ELSE 'P' ).
+      UPDATE ztmm_solped_up
+        SET ok_items    = @lv_ok,
+            error_items = @lv_err,
+            status      = @lv_status
+        WHERE upload_uuid = @ls_pending-upload_uuid.
     ENDLOOP.
 
     CLEAR lcl_buffer=>mt_pending.
