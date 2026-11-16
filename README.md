@@ -36,7 +36,7 @@ Las posiciones con error se informan en el log y **las demás se modifican**.
 - `ZCL_SOLPED_IMPUT_PROC` hace **un solo** `MODIFY ENTITIES OF i_purchaserequisitiontp` con todas las posiciones válidas:
   - `UPDATE` de `AccountAssignmentCategory = 'A'` en el ítem.
   - Si la posición ya tiene línea de imputación → `UPDATE` de `MasterFixedAsset` / `FixedAsset`.
-  - Si no tiene → `CREATE BY \_PurReqnAcctAssgmt` con activo, subnúmero y la cantidad total del ítem.
+  - Si no tiene → `CREATE BY \_PurchaseReqnAcctAssgmt` con activo, subnúmero y la cantidad total del ítem.
   - La cuenta de mayor **no se envía**: SAP la deriva de la clase del activo.
 - Si el estándar rechaza una posición en el `MODIFY`, se le devuelve su tipo de imputación original para que no
   bloquee el grabado de las demás, y el mensaje de SAP va al log.
@@ -69,8 +69,8 @@ Tip: crear `ZR_SOLPED_UP` y `ZR_SOLPED_LOG` juntas (se referencian entre sí) y 
 Los nombres siguientes se tomaron de la API estándar de solicitudes de pedido; confirmarlos en el sistema del cliente:
 
 1. **BDEF `I_PurchaseRequisitionTP`**: alias de entidades `PurchaseRequisition`, `PurchaseRequisitionItem`,
-   `PurReqnAcctAssgmt` y la asociación ítem → imputación `_PurReqnAcctAssgmt`.
-2. Campos de imputación en `I_PurReqnAcctAssgmtTP`: `MasterFixedAsset`, `FixedAsset`, `Quantity`.
+   `PurchaseReqnAcctAssgmt` y la asociación ítem → imputación `_PurchaseReqnAcctAssgmt`.
+2. Campos de imputación en `I_PurchaseReqnAcctAssgmtTP`: `MasterFixedAsset`, `FixedAsset`, `Quantity`.
 3. Campos de `I_PurchaseRequisitionItemAPI01`: `PurchaseRequisitionType`, `AccountAssignmentCategory`, `CompanyCode`,
    `RequestedQuantity`, `OrderedQuantity`, `PurchasingDocument`, `ProcessingStatus`, `IsDeleted`, `IsClosed`.
 4. Campos de `I_FixedAsset`: `CompanyCode`, `MasterFixedAsset`, `FixedAsset`.

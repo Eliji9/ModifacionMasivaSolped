@@ -196,7 +196,7 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
     ENDIF.
 
     " 4. Resultado
-    SORT mt_log BY row_no STABLE.
+    SORT mt_log STABLE BY row_no.
     ev_banfn          = mv_banfn.
     et_log            = mt_log.
     es_summary-total  = mv_total.
@@ -428,8 +428,8 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
     DATA lt_failed   TYPE tt_item_set.
     DATA lv_item     TYPE ty_item_no.
     DATA lt_upd_item TYPE TABLE FOR UPDATE i_purchaserequisitiontp\\PurchaseRequisitionItem.
-    DATA lt_cba_acct TYPE TABLE FOR CREATE i_purchaserequisitiontp\\PurchaseRequisitionItem\_PurReqnAcctAssgmt.
-    DATA lt_upd_acct TYPE TABLE FOR UPDATE i_purchaserequisitiontp\\PurReqnAcctAssgmt.
+    DATA lt_cba_acct TYPE TABLE FOR CREATE i_purchaserequisitiontp\\PurchaseRequisitionItem\_PurchaseReqnAcctAssgmt.
+    DATA lt_upd_acct TYPE TABLE FOR UPDATE i_purchaserequisitiontp\\PurchaseReqnAcctAssgmt.
     DATA lt_revert   TYPE TABLE FOR UPDATE i_purchaserequisitiontp\\PurchaseRequisitionItem.
 
     " ---- Simulación: solo validaciones ------------------------------------
@@ -446,7 +446,7 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
 
     " ---- 1. Imputaciones actuales de las posiciones -----------------------
     READ ENTITIES OF i_purchaserequisitiontp
-      ENTITY PurchaseRequisitionItem BY \_PurReqnAcctAssgmt
+      ENTITY PurchaseRequisitionItem BY \_PurchaseReqnAcctAssgmt
         ALL FIELDS WITH VALUE #( FOR ls_in IN it_input
                                  ( PurchaseRequisition     = mv_banfn
                                    PurchaseRequisitionItem = ls_in-item ) )
@@ -499,9 +499,9 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
     MODIFY ENTITIES OF i_purchaserequisitiontp
       ENTITY PurchaseRequisitionItem
         UPDATE FIELDS ( AccountAssignmentCategory ) WITH lt_upd_item
-        CREATE BY \_PurReqnAcctAssgmt
+        CREATE BY \_PurchaseReqnAcctAssgmt
           FIELDS ( MasterFixedAsset FixedAsset Quantity ) WITH lt_cba_acct
-      ENTITY PurReqnAcctAssgmt
+      ENTITY PurchaseReqnAcctAssgmt
         UPDATE FIELDS ( MasterFixedAsset FixedAsset ) WITH lt_upd_acct
       FAILED DATA(ls_failed)
       REPORTED DATA(ls_reported).
@@ -510,7 +510,7 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
     LOOP AT ls_failed-purchaserequisitionitem INTO DATA(ls_failed_item).
       INSERT CONV ty_item_no( ls_failed_item-PurchaseRequisitionItem ) INTO TABLE lt_failed.
     ENDLOOP.
-    LOOP AT ls_failed-purreqnacctassgmt INTO DATA(ls_failed_acct).
+    LOOP AT ls_failed-purchasereqnacctassgmt INTO DATA(ls_failed_acct).
       lv_item = COND #( WHEN ls_failed_acct-%cid IS NOT INITIAL
                         THEN substring( val = ls_failed_acct-%cid off = 3 )
                         ELSE ls_failed_acct-PurchaseRequisitionItem ).
@@ -546,7 +546,7 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
                        is_input = VALUE #( lt_change[ item = ls_rep_item-PurchaseRequisitionItem ] OPTIONAL ) ).
     ENDLOOP.
 
-    LOOP AT ls_reported-purreqnacctassgmt INTO DATA(ls_rep_acct).
+    LOOP AT ls_reported-purchasereqnacctassgmt INTO DATA(ls_rep_acct).
       lv_item = COND #( WHEN ls_rep_acct-%cid IS NOT INITIAL
                         THEN substring( val = ls_rep_acct-%cid off = 3 )
                         ELSE ls_rep_acct-PurchaseRequisitionItem ).
