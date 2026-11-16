@@ -1,4 +1,4 @@
-managed implementation in class zbp_r_solped_up unique;
+managed with additional save implementation in class zbp_r_solped_up unique;
 strict ( 2 );
 with draft;
 

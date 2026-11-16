@@ -8,6 +8,7 @@ cambia el tipo de imputación a **A (Activo fijo)** y asigna el **activo fijo** 
 - **Documentación técnica (Word):** [`Documentación Técnica Modificación masiva Solped - imputación A.docx`](Documentación%20Técnica%20Modificación%20masiva%20Solped%20-%20imputación%20A.docx)
 - Diseño de la solución: [`docs/diseno-solucion.md`](docs/diseno-solucion.md)
 - **Objetos y orden de creación:** [`src/README.md`](src/README.md)
+- **Wrapper Tier 2 de BAPI_PR_CHANGE y Procesar en segundo plano (paso a paso):** [`docs/paso-a-paso-wrapper-bgpf.md`](docs/paso-a-paso-wrapper-bgpf.md)
 - Archivo de carga de ejemplo: [`ejemplos/solped_40000230.xlsx`](ejemplos/solped_40000230.xlsx)
 
 ## Contexto
@@ -62,7 +63,8 @@ el rechazo del grabado completo resulta frecuente.
 ## Estructura
 
 ```
-src/zpc_mod_mas_sol_ped/   Objetos ABAP del paquete (copiar y pegar en ADT)
+src/zpc_mod_mas_sol_ped/   Objetos ABAP del paquete de la app (ABAP Cloud)
+src/zpc_mod_mas_sol_ped_t2/ Wrapper Tier 2 de BAPI_PR_CHANGE (Standard ABAP)
 docs/                      Diseño de la solución
 ejemplos/                  Archivos de carga de ejemplo
 ```
