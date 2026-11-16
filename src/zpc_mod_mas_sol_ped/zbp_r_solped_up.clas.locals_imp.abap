@@ -141,11 +141,14 @@ CLASS lhc_upload IMPLEMENTATION.
     LOOP AT lt_upload INTO DATA(ls_msg).
       APPEND VALUE #( %tky = ls_msg-%tky
                       %msg = new_message_with_text(
+                               " Information (no warning): un warning hace que Fiori pida
+                               " confirmación y vuelva a ejecutar la acción
                                severity = COND #( WHEN ls_msg-ErrorItems > 0 OR ls_msg-TotalItems = 0
-                                                  THEN if_abap_behv_message=>severity-warning
+                                                  THEN if_abap_behv_message=>severity-information
                                                   ELSE if_abap_behv_message=>severity-success )
-                               text     = |Simulación solped { ls_msg-PurchaseRequisition ALPHA = OUT }: { ls_msg-OkItems } posiciones correctas, | &&
-                                          |{ ls_msg-ErrorItems } con error. Revise el log.| ) )
+                               " Máximo 50 caracteres: el texto se corta en el popup
+                               text     = |Simulación { CONV string( ls_msg-PurchaseRequisition ) ALPHA = OUT }: | &&
+                                          |{ ls_msg-OkItems } OK, { ls_msg-ErrorItems } con error. Ver log| ) )
         TO reported-upload.
     ENDLOOP.
 
@@ -168,11 +171,14 @@ CLASS lhc_upload IMPLEMENTATION.
     LOOP AT lt_upload INTO DATA(ls_msg).
       APPEND VALUE #( %tky = ls_msg-%tky
                       %msg = new_message_with_text(
+                               " Information (no warning): un warning hace que Fiori pida
+                               " confirmación y vuelva a ejecutar la acción
                                severity = COND #( WHEN ls_msg-ErrorItems > 0 OR ls_msg-TotalItems = 0
-                                                  THEN if_abap_behv_message=>severity-warning
+                                                  THEN if_abap_behv_message=>severity-information
                                                   ELSE if_abap_behv_message=>severity-success )
-                               text     = |Solped { ls_msg-PurchaseRequisition ALPHA = OUT }: { ls_msg-OkItems } posiciones modificadas, | &&
-                                          |{ ls_msg-ErrorItems } con error. Revise el log.| ) )
+                               " Máximo 50 caracteres: el texto se corta en el popup
+                               text     = |Solped { CONV string( ls_msg-PurchaseRequisition ) ALPHA = OUT }: | &&
+                                          |{ ls_msg-OkItems } OK, { ls_msg-ErrorItems } con error. Ver log| ) )
         TO reported-upload.
     ENDLOOP.
 
