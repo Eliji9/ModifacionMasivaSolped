@@ -485,14 +485,32 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
                       PurchaseRequisitionItem   = ls_input-item
                       AccountAssignmentCategory = c_acct_cat_asset ) TO lt_upd_item.
 
+      " Línea de imputación ANTES del cambio (para dejar la posición como estaba)
       READ TABLE lt_accts INTO DATA(ls_acct)
            WITH KEY PurchaseRequisitionItem = ls_input-item.
       DATA(lv_has_acct) = xsdbool( sy-subrc = 0 ).
-      IF lv_has_acct = abap_true.
-        " Ya tiene línea de imputación: se actualiza. Como en ME52N al cambiar el
-        " tipo de imputación, se limpian el centro de coste y la cuenta de mayor
-        " del tipo anterior (K/Y); SAP deriva la cuenta de la clase del activo.
-        APPEND VALUE #( %tky             = ls_acct-%tky
+
+      " Paso 1: tipo de imputación A (como en ME52N, primero el tipo)
+      MODIFY ENTITIES OF i_purchaserequisitiontp
+        ENTITY PurchaseRequisitionItem
+          UPDATE FIELDS ( AccountAssignmentCategory ) WITH lt_upd_item
+        FAILED   DATA(ls_failed_cat)
+        REPORTED DATA(ls_reported_cat).
+
+      " Al cambiar el tipo, el estándar puede rehacer la imputación de la posición
+      " (igual que ME52N): se vuelve a leer la línea DESPUÉS del paso 1 y se usa
+      " su clave actual. Usar la clave anterior da FAILED UNSPECIFIC.
+      READ ENTITIES OF i_purchaserequisitiontp
+        ENTITY PurchaseRequisitionItem BY \_PurchaseReqnAcctAssgmt
+          ALL FIELDS WITH VALUE #( ( PurchaseRequisition     = mv_banfn
+                                     PurchaseRequisitionItem = ls_input-item ) )
+          RESULT DATA(lt_acct_now).
+
+      IF lt_acct_now IS NOT INITIAL.
+        " Hay línea de imputación: se actualiza con el activo. Se limpian el centro
+        " de coste y la cuenta del tipo anterior; SAP deriva la cuenta del activo.
+        DATA(ls_acct_now) = lt_acct_now[ 1 ].
+        APPEND VALUE #( %tky             = ls_acct_now-%tky
                         MasterFixedAsset = ls_input-asset
                         FixedAsset       = ls_input-subnumber
                         CostCenter       = space
@@ -506,13 +524,6 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
                                              FixedAsset       = ls_input-subnumber
                                              Quantity         = ls_input-quantity ) ) ) TO lt_cba_acct.
       ENDIF.
-
-      " Paso 1: tipo de imputación A (como en ME52N, primero el tipo)
-      MODIFY ENTITIES OF i_purchaserequisitiontp
-        ENTITY PurchaseRequisitionItem
-          UPDATE FIELDS ( AccountAssignmentCategory ) WITH lt_upd_item
-        FAILED   DATA(ls_failed_cat)
-        REPORTED DATA(ls_reported_cat).
 
       " Paso 2: activo en la línea de imputación (después del tipo)
       MODIFY ENTITIES OF i_purchaserequisitiontp
