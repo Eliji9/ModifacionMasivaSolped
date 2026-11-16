@@ -489,10 +489,14 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
            WITH KEY PurchaseRequisitionItem = ls_input-item.
       DATA(lv_has_acct) = xsdbool( sy-subrc = 0 ).
       IF lv_has_acct = abap_true.
-        " Ya tiene línea de imputación: se actualiza
+        " Ya tiene línea de imputación: se actualiza. Como en ME52N al cambiar el
+        " tipo de imputación, se limpian el centro de coste y la cuenta de mayor
+        " del tipo anterior (K/Y); SAP deriva la cuenta de la clase del activo.
         APPEND VALUE #( %tky             = ls_acct-%tky
                         MasterFixedAsset = ls_input-asset
-                        FixedAsset       = ls_input-subnumber ) TO lt_upd_acct.
+                        FixedAsset       = ls_input-subnumber
+                        CostCenter       = space
+                        GLAccount        = space ) TO lt_upd_acct.
       ELSE.
         " Sin línea de imputación: se crea por toda la cantidad
         APPEND VALUE #( PurchaseRequisition     = mv_banfn
@@ -516,7 +520,7 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
           CREATE BY \_PurchaseReqnAcctAssgmt
             FIELDS ( MasterFixedAsset FixedAsset Quantity ) WITH lt_cba_acct
         ENTITY PurReqnItmAccountAssignment
-          UPDATE FIELDS ( MasterFixedAsset FixedAsset ) WITH lt_upd_acct
+          UPDATE FIELDS ( MasterFixedAsset FixedAsset CostCenter GLAccount ) WITH lt_upd_acct
         MAPPED   DATA(ls_mapped)
         FAILED   DATA(ls_failed)
         REPORTED DATA(ls_reported).
@@ -566,13 +570,15 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
 
       " ---- Posición rechazada: se deja como estaba ------------------------
       IF lv_has_acct = abap_true.
-        " Se restaura el activo anterior de la línea de imputación
+        " Se restauran el activo, centro de coste y cuenta anteriores de la línea
         MODIFY ENTITIES OF i_purchaserequisitiontp
           ENTITY PurReqnItmAccountAssignment
-            UPDATE FIELDS ( MasterFixedAsset FixedAsset )
+            UPDATE FIELDS ( MasterFixedAsset FixedAsset CostCenter GLAccount )
             WITH VALUE #( ( %tky             = ls_acct-%tky
                             MasterFixedAsset = ls_acct-MasterFixedAsset
-                            FixedAsset       = ls_acct-FixedAsset ) ).
+                            FixedAsset       = ls_acct-FixedAsset
+                            CostCenter       = ls_acct-CostCenter
+                            GLAccount        = ls_acct-GLAccount ) ).
       ELSE.
         " La entidad de imputación no permite DELETE: a la línea que creó la app
         " se le quita el activo; al volver al tipo de imputación original SAP la
