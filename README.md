@@ -55,7 +55,8 @@ el rechazo del grabado completo resulta frecuente.
 - [ ] Confirmar que `ProcessingStatus = '05'` es "aprobada" en el workflow flexible de DS4
 - [ ] Prueba Simular / Procesar con la solped 40000802 (y una solped grande)
 - [ ] Casos de error: activo inexistente, posición inexistente, solped aprobada, solped con pedido
-- [ ] App Fiori List Report / Object Page generada en BAS y desplegada
+- [x] App Fiori generada en BAS y desplegada en DS4 (BSP `ZMMMODSOLPED`, orden `DS4K908727`)
+- [ ] Launchpad (inbound, catálogo, target mapping) y rol PFCG
 - [ ] ATC con la variante Clean Core del cliente
 
 ## Estructura
