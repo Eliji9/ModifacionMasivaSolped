@@ -503,10 +503,16 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
                                              Quantity         = ls_input-quantity ) ) ) TO lt_cba_acct.
       ENDIF.
 
-      " Tipo e imputación en el mismo MODIFY, como exige el estándar
+      " Paso 1: tipo de imputación A (como en ME52N, primero el tipo)
       MODIFY ENTITIES OF i_purchaserequisitiontp
         ENTITY PurchaseRequisitionItem
           UPDATE FIELDS ( AccountAssignmentCategory ) WITH lt_upd_item
+        FAILED   DATA(ls_failed_cat)
+        REPORTED DATA(ls_reported_cat).
+
+      " Paso 2: activo en la línea de imputación (después del tipo)
+      MODIFY ENTITIES OF i_purchaserequisitiontp
+        ENTITY PurchaseRequisitionItem
           CREATE BY \_PurchaseReqnAcctAssgmt
             FIELDS ( MasterFixedAsset FixedAsset Quantity ) WITH lt_cba_acct
         ENTITY PurReqnItmAccountAssignment
@@ -515,7 +521,20 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
         FAILED   DATA(ls_failed)
         REPORTED DATA(ls_reported).
 
-      " Mensajes de SAP de esta posición, vengan en la entidad que vengan
+      " Mensajes de SAP de esta posición (de los dos pasos), vengan en la entidad que vengan
+      LOOP AT ls_reported_cat-purchaserequisition INTO DATA(ls_rep_cat_header).
+        add_sap_message( io_msg = ls_rep_cat_header-%msg is_input = ls_input ).
+      ENDLOOP.
+      LOOP AT ls_reported_cat-purchaserequisitionitem INTO DATA(ls_rep_cat_item).
+        add_sap_message( io_msg = ls_rep_cat_item-%msg is_input = ls_input ).
+      ENDLOOP.
+      LOOP AT ls_reported_cat-purreqnitmaccountassignment INTO DATA(ls_rep_cat_acct).
+        add_sap_message( io_msg = ls_rep_cat_acct-%msg is_input = ls_input ).
+      ENDLOOP.
+      LOOP AT ls_reported_cat-%other INTO DATA(lo_other_cat).
+        add_sap_message( io_msg = lo_other_cat is_input = ls_input ).
+      ENDLOOP.
+
       LOOP AT ls_reported-purchaserequisition INTO DATA(ls_rep_header).
         add_sap_message( io_msg = ls_rep_header-%msg is_input = ls_input ).
       ENDLOOP.
@@ -530,7 +549,8 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
       ENDLOOP.
 
       " Rechazada: FAILED del estándar o algún mensaje de error de SAP
-      IF ls_failed IS NOT INITIAL
+      IF ls_failed_cat IS NOT INITIAL
+         OR ls_failed IS NOT INITIAL
          OR line_exists( mt_error_rows[ table_line = ls_input-row_no ] ).
         lv_rejected = abap_true.
       ENDIF.
