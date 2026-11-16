@@ -167,14 +167,21 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
            ev_banfn, et_log, es_summary.
 
     " 1. Lectura del Excel
-    TRY.
-        lt_rows = read_excel( iv_file ).
-      CATCH cx_root INTO DATA(lx_error).
-        add_log( iv_row  = 0
-                 iv_step = c_step-read
-                 iv_type = 'E'
-                 iv_text = |No se pudo leer el archivo Excel: { lx_error->get_text( ) }| ).
-    ENDTRY.
+    IF xstrlen( iv_file ) = 0.
+      add_log( iv_row  = 0
+               iv_step = c_step-read
+               iv_type = 'E'
+               iv_text = 'El archivo llegó vacío. Vuelva a subirlo, guarde y luego Simule o Procese' ).
+    ELSE.
+      TRY.
+          lt_rows = read_excel( iv_file ).
+        CATCH cx_root INTO DATA(lx_error).
+          add_log( iv_row  = 0
+                   iv_step = c_step-read
+                   iv_type = 'E'
+                   iv_text = |No se pudo leer el Excel ({ xstrlen( iv_file ) } bytes): { lx_error->get_text( ) }| ).
+      ENDTRY.
+    ENDIF.
 
     " 2. Interpretación de filas (solped + posiciones)
     DATA(lt_input) = parse( lt_rows ).
@@ -183,7 +190,7 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
       add_log( iv_row  = 0
                iv_step = c_step-read
                iv_type = 'E'
-               iv_text = 'El archivo no contiene datos' ).
+               iv_text = 'El archivo no tiene datos en la primera hoja (o no es un .xlsx válido)' ).
     ENDIF.
 
     " 3. Validaciones y modificación
@@ -208,6 +215,9 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
   METHOD read_excel.
     DATA(lo_document) = xco_cp_xlsx=>document->for_file_content( iv_file )->read_access( ).
     DATA(lo_worksheet) = lo_document->get_workbook( )->worksheet->at_position( 1 ).
+    IF lo_worksheet IS NOT BOUND OR lo_worksheet->exists( ) = abap_false.
+      RETURN.
+    ENDIF.
 
     " Columnas A..C desde la fila 1; el índice de la tabla = fila del Excel
     DATA(lo_pattern) = xco_cp_xlsx_selection=>pattern_builder->simple_from_to(

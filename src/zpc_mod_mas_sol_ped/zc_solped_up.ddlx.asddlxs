@@ -3,8 +3,8 @@
   headerInfo: {
     typeName: 'Carga de archivo',
     typeNamePlural: 'Cargas de archivo',
-    title: { type: #STANDARD, value: 'PurchaseRequisition' },
-    description: { type: #STANDARD, value: 'FileName' }
+    title: { type: #STANDARD, value: 'FileName' },
+    description: { type: #STANDARD, value: 'PurchaseRequisition' }
   },
   presentationVariant: [ { sortOrder: [ { by: 'LocalCreatedAt', direction: #DESC } ],
                            visualizations: [ { type: #AS_LINEITEM } ] } ]
