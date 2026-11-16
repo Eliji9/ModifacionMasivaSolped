@@ -435,12 +435,10 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
 
   METHOD change_items.
     DATA lt_change   TYPE tt_input.
-    DATA lt_failed   TYPE tt_item_set.
-    DATA lv_item     TYPE ty_item_no.
     DATA lt_upd_item TYPE TABLE FOR UPDATE i_purchaserequisitiontp\\PurchaseRequisitionItem.
     DATA lt_cba_acct TYPE TABLE FOR CREATE i_purchaserequisitiontp\\PurchaseRequisitionItem\_PurchaseReqnAcctAssgmt.
     DATA lt_upd_acct TYPE TABLE FOR UPDATE i_purchaserequisitiontp\\PurReqnItmAccountAssignment.
-    DATA lt_revert   TYPE TABLE FOR UPDATE i_purchaserequisitiontp\\PurchaseRequisitionItem.
+    DATA lv_rejected TYPE abap_bool.
 
     " ---- Simulación: solo validaciones ------------------------------------
     IF iv_test = abap_true.
@@ -477,25 +475,26 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
       APPEND ls_input TO lt_change.
     ENDLOOP.
 
-    IF lt_change IS INITIAL.
-      RETURN.
-    ENDIF.
-
-    " ---- 2. Tipo de imputación A + activo en la línea de imputación -------
+    " ---- 2. Una posición a la vez -----------------------------------------
+    " Así cada mensaje de SAP (p. ej. ME045) queda asociado a su posición, y una
+    " posición rechazada se devuelve a como estaba sin afectar a las demás.
     LOOP AT lt_change INTO ls_input.
+      CLEAR: lt_upd_item, lt_cba_acct, lt_upd_acct, lv_rejected.
+
       APPEND VALUE #( PurchaseRequisition       = mv_banfn
                       PurchaseRequisitionItem   = ls_input-item
                       AccountAssignmentCategory = c_acct_cat_asset ) TO lt_upd_item.
 
       READ TABLE lt_accts INTO DATA(ls_acct)
            WITH KEY PurchaseRequisitionItem = ls_input-item.
-      IF sy-subrc = 0.
-        " La posición ya tiene línea de imputación: se actualiza
+      DATA(lv_has_acct) = xsdbool( sy-subrc = 0 ).
+      IF lv_has_acct = abap_true.
+        " Ya tiene línea de imputación: se actualiza
         APPEND VALUE #( %tky             = ls_acct-%tky
                         MasterFixedAsset = ls_input-asset
                         FixedAsset       = ls_input-subnumber ) TO lt_upd_acct.
       ELSE.
-        " Sin línea de imputación: se crea la línea 01 por toda la cantidad
+        " Sin línea de imputación: se crea por toda la cantidad
         APPEND VALUE #( PurchaseRequisition     = mv_banfn
                         PurchaseRequisitionItem = ls_input-item
                         %target = VALUE #( ( %cid             = |ACC{ ls_input-item }|
@@ -503,88 +502,81 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
                                              FixedAsset       = ls_input-subnumber
                                              Quantity         = ls_input-quantity ) ) ) TO lt_cba_acct.
       ENDIF.
-    ENDLOOP.
 
-    " Mismo MODIFY: el estándar exige cambiar tipo e imputación en el mismo LUW
-    MODIFY ENTITIES OF i_purchaserequisitiontp
-      ENTITY PurchaseRequisitionItem
-        UPDATE FIELDS ( AccountAssignmentCategory ) WITH lt_upd_item
-        CREATE BY \_PurchaseReqnAcctAssgmt
-          FIELDS ( MasterFixedAsset FixedAsset Quantity ) WITH lt_cba_acct
-      ENTITY PurReqnItmAccountAssignment
-        UPDATE FIELDS ( MasterFixedAsset FixedAsset ) WITH lt_upd_acct
-      FAILED DATA(ls_failed)
-      REPORTED DATA(ls_reported).
+      " Tipo e imputación en el mismo MODIFY, como exige el estándar
+      MODIFY ENTITIES OF i_purchaserequisitiontp
+        ENTITY PurchaseRequisitionItem
+          UPDATE FIELDS ( AccountAssignmentCategory ) WITH lt_upd_item
+          CREATE BY \_PurchaseReqnAcctAssgmt
+            FIELDS ( MasterFixedAsset FixedAsset Quantity ) WITH lt_cba_acct
+        ENTITY PurReqnItmAccountAssignment
+          UPDATE FIELDS ( MasterFixedAsset FixedAsset ) WITH lt_upd_acct
+        MAPPED   DATA(ls_mapped)
+        FAILED   DATA(ls_failed)
+        REPORTED DATA(ls_reported).
 
-    " ---- 3. Posiciones rechazadas por el BO estándar ----------------------
-    LOOP AT ls_failed-purchaserequisitionitem INTO DATA(ls_failed_item).
-      INSERT CONV ty_item_no( ls_failed_item-PurchaseRequisitionItem ) INTO TABLE lt_failed.
-    ENDLOOP.
-    LOOP AT ls_failed-purreqnitmaccountassignment INTO DATA(ls_failed_acct).
-      lv_item = COND #( WHEN ls_failed_acct-%cid IS NOT INITIAL
-                        THEN substring( val = ls_failed_acct-%cid off = 3 )
-                        ELSE ls_failed_acct-PurchaseRequisitionItem ).
-      INSERT lv_item INTO TABLE lt_failed.
-    ENDLOOP.
-
-    " Si falló la imputación, se devuelve el tipo de imputación original para
-    " que esa posición no quede en A sin activo (y no bloquee el grabado).
-    IF lt_failed IS NOT INITIAL.
-      LOOP AT lt_failed INTO DATA(lv_failed).
-        READ TABLE lt_change INTO DATA(ls_failed_input) WITH KEY item = lv_failed.
-        IF sy-subrc = 0.
-          APPEND VALUE #( PurchaseRequisition       = mv_banfn
-                          PurchaseRequisitionItem   = lv_failed
-                          AccountAssignmentCategory = ls_failed_input-acct_cat_old ) TO lt_revert.
-        ENDIF.
+      " Mensajes de SAP de esta posición, vengan en la entidad que vengan
+      LOOP AT ls_reported-purchaserequisition INTO DATA(ls_rep_header).
+        add_sap_message( io_msg = ls_rep_header-%msg is_input = ls_input ).
+      ENDLOOP.
+      LOOP AT ls_reported-purchaserequisitionitem INTO DATA(ls_rep_item).
+        add_sap_message( io_msg = ls_rep_item-%msg is_input = ls_input ).
+      ENDLOOP.
+      LOOP AT ls_reported-purreqnitmaccountassignment INTO DATA(ls_rep_acct).
+        add_sap_message( io_msg = ls_rep_acct-%msg is_input = ls_input ).
+      ENDLOOP.
+      LOOP AT ls_reported-%other INTO DATA(lo_other).
+        add_sap_message( io_msg = lo_other is_input = ls_input ).
       ENDLOOP.
 
-      IF lt_revert IS NOT INITIAL.
+      " Rechazada: FAILED del estándar o algún mensaje de error de SAP
+      IF ls_failed IS NOT INITIAL
+         OR line_exists( mt_error_rows[ table_line = ls_input-row_no ] ).
+        lv_rejected = abap_true.
+      ENDIF.
+
+      IF lv_rejected = abap_false.
+        add_log( is_input = ls_input
+                 iv_step  = c_step-change
+                 iv_type  = 'S'
+                 iv_text  = |Imputación cambiada de { ls_input-acct_cat_old } a A y activo | &&
+                            |{ ls_input-asset ALPHA = OUT }-{ ls_input-subnumber ALPHA = OUT } asignado| ).
+        CONTINUE.
+      ENDIF.
+
+      " ---- Posición rechazada: se deja como estaba ------------------------
+      IF lv_has_acct = abap_true.
+        " Se restaura el activo anterior de la línea de imputación
         MODIFY ENTITIES OF i_purchaserequisitiontp
-          ENTITY PurchaseRequisitionItem
-            UPDATE FIELDS ( AccountAssignmentCategory ) WITH lt_revert.
-      ENDIF.
-    ENDIF.
-
-    " ---- 4. Mensajes del estándar al log -----------------------------------
-    LOOP AT ls_reported-purchaserequisition INTO DATA(ls_rep_header).
-      add_sap_message( io_msg = ls_rep_header-%msg ).
-    ENDLOOP.
-
-    LOOP AT ls_reported-purchaserequisitionitem INTO DATA(ls_rep_item).
-      add_sap_message( io_msg   = ls_rep_item-%msg
-                       is_input = VALUE #( lt_change[ item = ls_rep_item-PurchaseRequisitionItem ] OPTIONAL ) ).
-    ENDLOOP.
-
-    LOOP AT ls_reported-purreqnitmaccountassignment INTO DATA(ls_rep_acct).
-      lv_item = COND #( WHEN ls_rep_acct-%cid IS NOT INITIAL
-                        THEN substring( val = ls_rep_acct-%cid off = 3 )
-                        ELSE ls_rep_acct-PurchaseRequisitionItem ).
-      add_sap_message( io_msg   = ls_rep_acct-%msg
-                       is_input = VALUE #( lt_change[ item = lv_item ] OPTIONAL ) ).
-    ENDLOOP.
-
-    " ---- 5. Resultado por posición -----------------------------------------
-    LOOP AT lt_change INTO ls_input.
-      IF line_exists( lt_failed[ table_line = ls_input-item ] ).
-        IF NOT line_exists( mt_error_rows[ table_line = ls_input-row_no ] ).
-          add_log( is_input = ls_input
-                   iv_step  = c_step-change
-                   iv_type  = 'E'
-                   iv_text  = 'SAP rechazó el cambio de la posición; no se modificó' ).
+          ENTITY PurReqnItmAccountAssignment
+            UPDATE FIELDS ( MasterFixedAsset FixedAsset )
+            WITH VALUE #( ( %tky             = ls_acct-%tky
+                            MasterFixedAsset = ls_acct-MasterFixedAsset
+                            FixedAsset       = ls_acct-FixedAsset ) ).
+      ELSE.
+        " Se borra la línea de imputación que creó la app
+        READ TABLE ls_mapped-purreqnitmaccountassignment INTO DATA(ls_new_acct)
+             WITH KEY %cid = |ACC{ ls_input-item }|.
+        IF sy-subrc = 0.
+          MODIFY ENTITIES OF i_purchaserequisitiontp
+            ENTITY PurReqnItmAccountAssignment
+              DELETE FROM VALUE #( ( %tky = ls_new_acct-%tky ) ).
         ENDIF.
-        CONTINUE.
       ENDIF.
 
-      IF line_exists( mt_error_rows[ table_line = ls_input-row_no ] ).
-        CONTINUE.
-      ENDIF.
+      MODIFY ENTITIES OF i_purchaserequisitiontp
+        ENTITY PurchaseRequisitionItem
+          UPDATE FIELDS ( AccountAssignmentCategory )
+          WITH VALUE #( ( PurchaseRequisition       = mv_banfn
+                          PurchaseRequisitionItem   = ls_input-item
+                          AccountAssignmentCategory = ls_input-acct_cat_old ) ).
 
-      add_log( is_input = ls_input
-               iv_step  = c_step-change
-               iv_type  = 'S'
-               iv_text  = |Imputación cambiada de { ls_input-acct_cat_old } a A y activo | &&
-                          |{ ls_input-asset ALPHA = OUT }-{ ls_input-subnumber ALPHA = OUT } asignado| ).
+      IF NOT line_exists( mt_error_rows[ table_line = ls_input-row_no ] ).
+        add_log( is_input = ls_input
+                 iv_step  = c_step-change
+                 iv_type  = 'E'
+                 iv_text  = 'SAP rechazó la posición sin devolver mensaje; no se modificó' ).
+      ENDIF.
     ENDLOOP.
   ENDMETHOD.
 

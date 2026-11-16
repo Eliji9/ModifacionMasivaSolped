@@ -97,7 +97,7 @@ Usuario ──► Crear carga ──► Subir .xlsx ──► Guardar
 
 ## 7. Modificación de la solped
 
-Un solo `MODIFY ENTITIES OF i_purchaserequisitiontp` con todas las posiciones válidas:
+Un `MODIFY ENTITIES OF i_purchaserequisitiontp` **por posición** (así cada mensaje de SAP queda asociado a su posición):
 
 | Entidad | Operación | Campos |
 |---|---|---|
@@ -107,8 +107,10 @@ Un solo `MODIFY ENTITIES OF i_purchaserequisitiontp` con todas las posiciones v�
 
 - Tipo e imputación van en el **mismo LUW**, como exige el estándar al cambiar el tipo de imputación.
 - La **cuenta de mayor no se envía**: SAP la deriva de la clase del activo.
-- Si SAP rechaza una posición al modificar, se le devuelve su tipo de imputación original para que
-  no quede en `A` sin activo y no bloquee el grabado de las demás. El mensaje de SAP va al log.
+- Si SAP rechaza una posición (FAILED o cualquier mensaje de error, p. ej. `ME045` cuenta de mayor no
+  utilizable), la posición se deja como estaba: se restaura el activo anterior o se borra la línea de
+  imputación creada, y se devuelve el tipo de imputación original. El **mensaje exacto de SAP** (texto,
+  clase y número) va al log de esa posición.
 - La autorización la valida el BO estándar (el EML se ejecuta sin `IN LOCAL MODE`).
 
 ## 8. Log
