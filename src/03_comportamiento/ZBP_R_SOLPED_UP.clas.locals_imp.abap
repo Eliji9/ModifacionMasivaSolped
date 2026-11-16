@@ -37,11 +37,10 @@ CLASS lhc_upload DEFINITION INHERITING FROM cl_abap_behavior_handler.
     METHODS procesar FOR MODIFY
       IMPORTING keys FOR ACTION Upload~procesar RESULT result.
 
-    "! Lógica común de simular / procesar
+    "! Lógica común de simular / procesar (deja resumen y log en la carga)
     METHODS run
-      IMPORTING it_keys     TYPE tt_upload_keys
-                iv_test     TYPE abap_bool
-      CHANGING  cs_reported TYPE RESPONSE FOR REPORTED EARLY zr_solped_up.
+      IMPORTING it_keys TYPE tt_upload_keys
+                iv_test TYPE abap_bool.
 
 ENDCLASS.
 
@@ -130,14 +129,25 @@ CLASS lhc_upload IMPLEMENTATION.
 
 
   METHOD simular.
-    run( EXPORTING it_keys     = CORRESPONDING #( keys )
-                   iv_test     = abap_true
-         CHANGING  cs_reported = reported ).
+    run( it_keys = CORRESPONDING #( keys )
+         iv_test = abap_true ).
 
     READ ENTITIES OF zr_solped_up IN LOCAL MODE
       ENTITY Upload
         ALL FIELDS WITH CORRESPONDING #( keys )
         RESULT DATA(lt_upload).
+
+    " Mensaje resumen para el usuario
+    LOOP AT lt_upload INTO DATA(ls_msg).
+      APPEND VALUE #( %tky = ls_msg-%tky
+                      %msg = new_message_with_text(
+                               severity = COND #( WHEN ls_msg-ErrorItems > 0 OR ls_msg-TotalItems = 0
+                                                  THEN if_abap_behv_message=>severity-warning
+                                                  ELSE if_abap_behv_message=>severity-success )
+                               text     = |Simulación solped { ls_msg-PurchaseRequisition ALPHA = OUT }: { ls_msg-OkItems } posiciones correctas, | &&
+                                          |{ ls_msg-ErrorItems } con error. Revise el log.| ) )
+        TO reported-upload.
+    ENDLOOP.
 
     result = VALUE #( FOR ls_upload IN lt_upload
                       ( %tky   = ls_upload-%tky
@@ -146,14 +156,25 @@ CLASS lhc_upload IMPLEMENTATION.
 
 
   METHOD procesar.
-    run( EXPORTING it_keys     = CORRESPONDING #( keys )
-                   iv_test     = abap_false
-         CHANGING  cs_reported = reported ).
+    run( it_keys = CORRESPONDING #( keys )
+         iv_test = abap_false ).
 
     READ ENTITIES OF zr_solped_up IN LOCAL MODE
       ENTITY Upload
         ALL FIELDS WITH CORRESPONDING #( keys )
         RESULT DATA(lt_upload).
+
+    " Mensaje resumen para el usuario
+    LOOP AT lt_upload INTO DATA(ls_msg).
+      APPEND VALUE #( %tky = ls_msg-%tky
+                      %msg = new_message_with_text(
+                               severity = COND #( WHEN ls_msg-ErrorItems > 0 OR ls_msg-TotalItems = 0
+                                                  THEN if_abap_behv_message=>severity-warning
+                                                  ELSE if_abap_behv_message=>severity-success )
+                               text     = |Solped { ls_msg-PurchaseRequisition ALPHA = OUT }: { ls_msg-OkItems } posiciones modificadas, | &&
+                                          |{ ls_msg-ErrorItems } con error. Revise el log.| ) )
+        TO reported-upload.
+    ENDLOOP.
 
     result = VALUE #( FOR ls_upload IN lt_upload
                       ( %tky   = ls_upload-%tky
@@ -231,17 +252,6 @@ CLASS lhc_upload IMPLEMENTATION.
                                                MsgNo                   = ls_log-msg_no
                                                Message                 = ls_log-message ) ) ) ).
 
-      " Mensaje resumen para el usuario
-      APPEND VALUE #( %tky = ls_upload-%tky
-                      %msg = new_message_with_text(
-                               severity = COND #( WHEN lv_has_error = abap_true
-                                                  THEN if_abap_behv_message=>severity-warning
-                                                  ELSE if_abap_behv_message=>severity-success )
-                               text     = COND string(
-                                            WHEN iv_test = abap_true
-                                              THEN |Simulación solped { lv_banfn ALPHA = OUT }: { ls_summary-ok } posiciones correctas, { ls_summary-errors } con error. Revise el log.|
-                                            ELSE |Solped { lv_banfn ALPHA = OUT }: { ls_summary-ok } posiciones modificadas, { ls_summary-errors } con error. Revise el log.| ) ) )
-        TO cs_reported-upload.
 
     ENDLOOP.
   ENDMETHOD.
