@@ -554,13 +554,18 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
                             MasterFixedAsset = ls_acct-MasterFixedAsset
                             FixedAsset       = ls_acct-FixedAsset ) ).
       ELSE.
-        " Se borra la línea de imputación que creó la app
+        " La entidad de imputación no permite DELETE: a la línea que creó la app
+        " se le quita el activo; al volver al tipo de imputación original SAP la
+        " ajusta como en ME52N.
         READ TABLE ls_mapped-purreqnitmaccountassignment INTO DATA(ls_new_acct)
              WITH KEY %cid = |ACC{ ls_input-item }|.
         IF sy-subrc = 0.
           MODIFY ENTITIES OF i_purchaserequisitiontp
             ENTITY PurReqnItmAccountAssignment
-              DELETE FROM VALUE #( ( %tky = ls_new_acct-%tky ) ).
+              UPDATE FIELDS ( MasterFixedAsset FixedAsset )
+              WITH VALUE #( ( %tky             = ls_new_acct-%tky
+                              MasterFixedAsset = space
+                              FixedAsset       = space ) ).
         ENDIF.
       ENDIF.
 

@@ -108,8 +108,8 @@ Un `MODIFY ENTITIES OF i_purchaserequisitiontp` **por posición** (así cada men
 - Tipo e imputación van en el **mismo LUW**, como exige el estándar al cambiar el tipo de imputación.
 - La **cuenta de mayor no se envía**: SAP la deriva de la clase del activo.
 - Si SAP rechaza una posición (FAILED o cualquier mensaje de error, p. ej. `ME045` cuenta de mayor no
-  utilizable), la posición se deja como estaba: se restaura el activo anterior o se borra la línea de
-  imputación creada, y se devuelve el tipo de imputación original. El **mensaje exacto de SAP** (texto,
+  utilizable), la posición se deja como estaba: se restaura el activo anterior o se quita el activo de la
+  línea de imputación creada (la entidad no permite DELETE), y se devuelve el tipo de imputación original. El **mensaje exacto de SAP** (texto,
   clase y número) va al log de esa posición.
 - La autorización la valida el BO estándar (el EML se ejecuta sin `IN LOCAL MODE`).
 
