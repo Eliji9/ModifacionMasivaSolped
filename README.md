@@ -5,6 +5,7 @@ que modifica de forma masiva las posiciones de una solicitud de pedido de trasla
 cambia el tipo de imputación a **A (Activo fijo)** y asigna el **activo fijo** en la pestaña
 *Imputación*, a partir de un archivo Excel, y muestra un log por posición.
 
+- **Documentación técnica (Word):** [`docs/Documentacion_Modificacion_Masiva_Solped.docx`](docs/Documentacion_Modificacion_Masiva_Solped.docx)
 - Diseño de la solución: [`docs/diseno-solucion.md`](docs/diseno-solucion.md)
 - **Objetos y orden de creación:** [`src/README.md`](src/README.md)
 - Archivo de carga de ejemplo: [`ejemplos/solped_40000230.xlsx`](ejemplos/solped_40000230.xlsx)
