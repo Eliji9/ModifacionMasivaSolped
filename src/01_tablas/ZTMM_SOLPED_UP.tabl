@@ -1,0 +1,26 @@
+@EndUserText.label : 'Modificación masiva solped - Archivo cargado'
+@AbapCatalog.enhancement.category : #NOT_EXTENSIBLE
+@AbapCatalog.tableCategory : #TRANSPARENT
+@AbapCatalog.deliveryClass : #A
+@AbapCatalog.dataMaintenance : #RESTRICTED
+define table ztmm_solped_up {
+
+  key client            : abap.clnt not null;
+  key upload_uuid       : sysuuid_x16 not null;
+  purchase_requisition  : abap.char(10);
+  file_content          : abap.rawstring(0);
+  mime_type             : abap.char(128);
+  file_name             : abap.char(255);
+  status                : abap.char(1);
+  run_mode              : abap.char(1);
+  total_items           : abap.int4;
+  ok_items              : abap.int4;
+  error_items           : abap.int4;
+  processed_at          : timestampl;
+  local_created_by      : abp_creation_user;
+  local_created_at      : abp_creation_tstmpl;
+  local_last_changed_by : abp_locinst_lastchange_user;
+  local_last_changed_at : abp_locinst_lastchange_tstmpl;
+  last_changed_at       : abp_lastchange_tstmpl;
+
+}

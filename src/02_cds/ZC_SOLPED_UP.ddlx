@@ -1,0 +1,95 @@
+@Metadata.layer: #CUSTOMER
+@UI: {
+  headerInfo: {
+    typeName: 'Carga de archivo',
+    typeNamePlural: 'Cargas de archivo',
+    title: { type: #STANDARD, value: 'PurchaseRequisition' },
+    description: { type: #STANDARD, value: 'FileName' }
+  },
+  presentationVariant: [ { sortOrder: [ { by: 'LocalCreatedAt', direction: #DESC } ],
+                           visualizations: [ { type: #AS_LINEITEM } ] } ]
+}
+annotate entity ZC_SOLPED_UP with
+{
+  @UI.facet: [
+    { id: 'HdrEstado',  purpose: #HEADER, type: #DATAPOINT_REFERENCE, targetQualifier: 'Status',     position: 10 },
+    { id: 'HdrTotal',   purpose: #HEADER, type: #DATAPOINT_REFERENCE, targetQualifier: 'TotalItems', position: 20 },
+    { id: 'HdrOk',      purpose: #HEADER, type: #DATAPOINT_REFERENCE, targetQualifier: 'OkItems',    position: 30 },
+    { id: 'HdrErrores', purpose: #HEADER, type: #DATAPOINT_REFERENCE, targetQualifier: 'ErrorItems', position: 40 },
+    { id: 'Archivo', type: #IDENTIFICATION_REFERENCE, label: 'Archivo',                   position: 10 },
+    { id: 'Log',     type: #LINEITEM_REFERENCE,       label: 'Log', targetElement: '_Log', position: 20 }
+  ]
+
+  @UI.hidden: true
+  UploadUuid;
+
+  @UI: {
+    lineItem: [ { position: 10, label: 'Solped' },
+                { type: #FOR_ACTION, dataAction: 'simular',  label: 'Simular' },
+                { type: #FOR_ACTION, dataAction: 'procesar', label: 'Procesar' } ],
+    identification: [ { position: 30, label: 'Solped' },
+                      { type: #FOR_ACTION, dataAction: 'simular',  label: 'Simular (solo validar)' },
+                      { type: #FOR_ACTION, dataAction: 'procesar', label: 'Procesar' } ],
+    selectionField: [ { position: 10 } ]
+  }
+  @EndUserText.label: 'Solped'
+  PurchaseRequisition;
+
+  @UI.identification: [ { position: 10, label: 'Archivo (.xlsx)' } ]
+  FileContent;
+
+  @UI.hidden: true
+  MimeType;
+
+  @UI.lineItem: [ { position: 20, label: 'Archivo' } ]
+  @UI.identification: [ { position: 20, label: 'Nombre del archivo' } ]
+  FileName;
+
+  @UI.hidden: true
+  Status;
+
+  @UI.lineItem: [ { position: 30, label: 'Estado', criticality: 'StatusCriticality' } ]
+  @UI.dataPoint: { qualifier: 'Status', title: 'Estado', criticality: 'StatusCriticality' }
+  StatusText;
+
+  @UI.hidden: true
+  StatusCriticality;
+
+  @UI.hidden: true
+  RunMode;
+
+  @UI.lineItem: [ { position: 40, label: 'Modo' } ]
+  @UI.identification: [ { position: 40, label: 'Modo' } ]
+  RunModeText;
+
+  @UI.lineItem: [ { position: 50, label: 'Posiciones' } ]
+  @UI.dataPoint: { qualifier: 'TotalItems', title: 'Posiciones' }
+  TotalItems;
+
+  @UI.lineItem: [ { position: 60, label: 'Correctas' } ]
+  @UI.dataPoint: { qualifier: 'OkItems', title: 'Correctas' }
+  OkItems;
+
+  @UI.lineItem: [ { position: 70, label: 'Con error' } ]
+  @UI.dataPoint: { qualifier: 'ErrorItems', title: 'Con error' }
+  ErrorItems;
+
+  @UI.lineItem: [ { position: 80, label: 'Procesado el' } ]
+  @UI.identification: [ { position: 50, label: 'Procesado el' } ]
+  ProcessedAt;
+
+  @UI.lineItem: [ { position: 90, label: 'Creado por' } ]
+  LocalCreatedBy;
+
+  @UI.hidden: true
+  LocalCreatedAt;
+
+  @UI.hidden: true
+  LocalLastChangedBy;
+
+  @UI.hidden: true
+  LocalLastChangedAt;
+
+  @UI.hidden: true
+  LastChangedAt;
+}

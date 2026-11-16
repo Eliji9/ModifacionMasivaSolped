@@ -1,0 +1,249 @@
+*"* Implementación del comportamiento de ZR_SOLPED_UP
+*"* (pestaña "Local Types" del behavior pool ZBP_R_SOLPED_UP)
+
+CLASS lhc_upload DEFINITION INHERITING FROM cl_abap_behavior_handler.
+
+  PRIVATE SECTION.
+
+    CONSTANTS:
+      BEGIN OF c_status,
+        new         TYPE c LENGTH 1 VALUE 'N',
+        simulated   TYPE c LENGTH 1 VALUE 'S',
+        processed   TYPE c LENGTH 1 VALUE 'P',
+        with_errors TYPE c LENGTH 1 VALUE 'E',
+      END OF c_status,
+      BEGIN OF c_mode,
+        test TYPE c LENGTH 1 VALUE 'S',
+        real TYPE c LENGTH 1 VALUE 'R',
+      END OF c_mode.
+
+    TYPES tt_upload_keys TYPE TABLE FOR READ IMPORT zr_solped_up\\Upload.
+
+    METHODS get_global_authorizations FOR GLOBAL AUTHORIZATION
+      IMPORTING REQUEST requested_authorizations FOR Upload RESULT result.
+
+    METHODS get_instance_features FOR INSTANCE FEATURES
+      IMPORTING keys REQUEST requested_features FOR Upload RESULT result.
+
+    METHODS setInitialStatus FOR DETERMINE ON MODIFY
+      IMPORTING keys FOR Upload~setInitialStatus.
+
+    METHODS validateFile FOR VALIDATE ON SAVE
+      IMPORTING keys FOR Upload~validateFile.
+
+    METHODS simular FOR MODIFY
+      IMPORTING keys FOR ACTION Upload~simular RESULT result.
+
+    METHODS procesar FOR MODIFY
+      IMPORTING keys FOR ACTION Upload~procesar RESULT result.
+
+    "! Lógica común de simular / procesar
+    METHODS run
+      IMPORTING it_keys     TYPE tt_upload_keys
+                iv_test     TYPE abap_bool
+      CHANGING  cs_reported TYPE RESPONSE FOR REPORTED EARLY zr_solped_up.
+
+ENDCLASS.
+
+
+CLASS lhc_upload IMPLEMENTATION.
+
+  METHOD get_global_authorizations.
+    " La autorización de modificar la solped la valida el BO estándar
+    " I_PurchaseRequisitionTP (el EML se ejecuta sin IN LOCAL MODE).
+    result = VALUE #( %create          = if_abap_behv=>auth-allowed
+                      %update          = if_abap_behv=>auth-allowed
+                      %delete          = if_abap_behv=>auth-allowed
+                      %action-simular  = if_abap_behv=>auth-allowed
+                      %action-procesar = if_abap_behv=>auth-allowed
+                      %action-Edit     = if_abap_behv=>auth-allowed ).
+  ENDMETHOD.
+
+
+  METHOD get_instance_features.
+    READ ENTITIES OF zr_solped_up IN LOCAL MODE
+      ENTITY Upload
+        FIELDS ( Status FileName ) WITH CORRESPONDING #( keys )
+        RESULT DATA(lt_upload)
+      FAILED failed.
+
+    " Simular / Procesar solo con archivo cargado y mientras no se haya
+    " procesado completamente sin errores.
+    result = VALUE #( FOR ls_upload IN lt_upload
+                      ( %tky             = ls_upload-%tky
+                        %action-simular  = COND #( WHEN ls_upload-FileName IS INITIAL
+                                                     OR ls_upload-Status = c_status-processed
+                                                   THEN if_abap_behv=>fc-o-disabled
+                                                   ELSE if_abap_behv=>fc-o-enabled )
+                        %action-procesar = COND #( WHEN ls_upload-FileName IS INITIAL
+                                                     OR ls_upload-Status = c_status-processed
+                                                   THEN if_abap_behv=>fc-o-disabled
+                                                   ELSE if_abap_behv=>fc-o-enabled ) ) ).
+  ENDMETHOD.
+
+
+  METHOD setInitialStatus.
+    READ ENTITIES OF zr_solped_up IN LOCAL MODE
+      ENTITY Upload
+        FIELDS ( Status ) WITH CORRESPONDING #( keys )
+        RESULT DATA(lt_upload).
+
+    DELETE lt_upload WHERE Status IS NOT INITIAL.
+    CHECK lt_upload IS NOT INITIAL.
+
+    MODIFY ENTITIES OF zr_solped_up IN LOCAL MODE
+      ENTITY Upload
+        UPDATE FIELDS ( Status )
+        WITH VALUE #( FOR ls_upload IN lt_upload
+                      ( %tky   = ls_upload-%tky
+                        Status = c_status-new ) ).
+  ENDMETHOD.
+
+
+  METHOD validateFile.
+    READ ENTITIES OF zr_solped_up IN LOCAL MODE
+      ENTITY Upload
+        FIELDS ( FileName ) WITH CORRESPONDING #( keys )
+        RESULT DATA(lt_upload).
+
+    LOOP AT lt_upload INTO DATA(ls_upload).
+      APPEND VALUE #( %tky        = ls_upload-%tky
+                      %state_area = 'VALIDATE_FILE' ) TO reported-upload.
+
+      DATA(lv_text) = COND string(
+        WHEN ls_upload-FileName IS INITIAL
+          THEN `Suba el archivo Excel (.xlsx) con la solped y sus posiciones`
+        WHEN to_upper( ls_upload-FileName ) NP '*.XLSX'
+          THEN `El archivo debe ser de tipo .xlsx` ).
+
+      IF lv_text IS NOT INITIAL.
+        APPEND VALUE #( %tky = ls_upload-%tky ) TO failed-upload.
+        APPEND VALUE #( %tky                 = ls_upload-%tky
+                        %state_area          = 'VALIDATE_FILE'
+                        %msg                 = new_message_with_text(
+                                                 severity = if_abap_behv_message=>severity-error
+                                                 text     = lv_text )
+                        %element-FileContent = if_abap_behv=>mk-on ) TO reported-upload.
+      ENDIF.
+    ENDLOOP.
+  ENDMETHOD.
+
+
+  METHOD simular.
+    run( EXPORTING it_keys     = CORRESPONDING #( keys )
+                   iv_test     = abap_true
+         CHANGING  cs_reported = reported ).
+
+    READ ENTITIES OF zr_solped_up IN LOCAL MODE
+      ENTITY Upload
+        ALL FIELDS WITH CORRESPONDING #( keys )
+        RESULT DATA(lt_upload).
+
+    result = VALUE #( FOR ls_upload IN lt_upload
+                      ( %tky   = ls_upload-%tky
+                        %param = ls_upload ) ).
+  ENDMETHOD.
+
+
+  METHOD procesar.
+    run( EXPORTING it_keys     = CORRESPONDING #( keys )
+                   iv_test     = abap_false
+         CHANGING  cs_reported = reported ).
+
+    READ ENTITIES OF zr_solped_up IN LOCAL MODE
+      ENTITY Upload
+        ALL FIELDS WITH CORRESPONDING #( keys )
+        RESULT DATA(lt_upload).
+
+    result = VALUE #( FOR ls_upload IN lt_upload
+                      ( %tky   = ls_upload-%tky
+                        %param = ls_upload ) ).
+  ENDMETHOD.
+
+
+  METHOD run.
+    DATA lv_now    TYPE timestampl.
+    DATA lv_status TYPE c LENGTH 1.
+
+    GET TIME STAMP FIELD lv_now.
+
+    READ ENTITIES OF zr_solped_up IN LOCAL MODE
+      ENTITY Upload
+        FIELDS ( FileContent FileName ) WITH CORRESPONDING #( it_keys )
+        RESULT DATA(lt_upload)
+      ENTITY Upload BY \_Log
+        FIELDS ( LogUuid ) WITH CORRESPONDING #( it_keys )
+        RESULT DATA(lt_old_log).
+
+    " Cada ejecución reemplaza el log anterior
+    IF lt_old_log IS NOT INITIAL.
+      MODIFY ENTITIES OF zr_solped_up IN LOCAL MODE
+        ENTITY Log
+          DELETE FROM VALUE #( FOR ls_old IN lt_old_log ( %tky = ls_old-%tky ) ).
+    ENDIF.
+
+    LOOP AT lt_upload INTO DATA(ls_upload).
+
+      " Lectura del Excel, validaciones y modificación de la solped (EML)
+      DATA(lo_processor) = NEW zcl_solped_imput_proc( ).
+      lo_processor->execute( EXPORTING iv_file    = ls_upload-FileContent
+                                       iv_test    = iv_test
+                             IMPORTING ev_banfn   = DATA(lv_banfn)
+                                       et_log     = DATA(lt_log)
+                                       es_summary = DATA(ls_summary) ).
+
+      DATA(lv_has_error) = xsdbool( line_exists( lt_log[ msg_type = 'E' ] ) ).
+
+      lv_status = COND #( WHEN iv_test = abap_true    THEN c_status-simulated
+                          WHEN lv_has_error = abap_true THEN c_status-with_errors
+                          ELSE c_status-processed ).
+
+      MODIFY ENTITIES OF zr_solped_up IN LOCAL MODE
+        ENTITY Upload
+          UPDATE FIELDS ( PurchaseRequisition Status RunMode TotalItems OkItems ErrorItems ProcessedAt )
+          WITH VALUE #( ( %tky                = ls_upload-%tky
+                          PurchaseRequisition = lv_banfn
+                          Status              = lv_status
+                          RunMode             = COND #( WHEN iv_test = abap_true THEN c_mode-test ELSE c_mode-real )
+                          TotalItems          = ls_summary-total
+                          OkItems             = ls_summary-ok
+                          ErrorItems          = ls_summary-errors
+                          ProcessedAt         = lv_now ) )
+          CREATE BY \_Log
+          FIELDS ( RowNo PurchaseRequisition PurchaseRequisitionItem AcctAssgmtCatOld AcctAssgmtCatNew
+                   MasterFixedAsset FixedAsset CompanyCode Step MsgType MsgOrigin MsgId MsgNo Message )
+          WITH VALUE #( ( %tky    = ls_upload-%tky
+                          %target = VALUE #( FOR ls_log IN lt_log INDEX INTO lv_index
+                                             ( %cid                    = |LOG{ lv_index }|
+                                               %is_draft               = ls_upload-%is_draft
+                                               RowNo                   = ls_log-row_no
+                                               PurchaseRequisition     = ls_log-purchase_requisition
+                                               PurchaseRequisitionItem = ls_log-item
+                                               AcctAssgmtCatOld        = ls_log-acct_cat_old
+                                               AcctAssgmtCatNew        = ls_log-acct_cat_new
+                                               MasterFixedAsset        = ls_log-master_fixed_asset
+                                               FixedAsset              = ls_log-fixed_asset
+                                               CompanyCode             = ls_log-company_code
+                                               Step                    = ls_log-step
+                                               MsgType                 = ls_log-msg_type
+                                               MsgOrigin               = ls_log-msg_origin
+                                               MsgId                   = ls_log-msg_id
+                                               MsgNo                   = ls_log-msg_no
+                                               Message                 = ls_log-message ) ) ) ).
+
+      " Mensaje resumen para el usuario
+      APPEND VALUE #( %tky = ls_upload-%tky
+                      %msg = new_message_with_text(
+                               severity = COND #( WHEN lv_has_error = abap_true
+                                                  THEN if_abap_behv_message=>severity-warning
+                                                  ELSE if_abap_behv_message=>severity-success )
+                               text     = COND string(
+                                            WHEN iv_test = abap_true
+                                              THEN |Simulación solped { lv_banfn ALPHA = OUT }: { ls_summary-ok } posiciones correctas, { ls_summary-errors } con error. Revise el log.|
+                                            ELSE |Solped { lv_banfn ALPHA = OUT }: { ls_summary-ok } posiciones modificadas, { ls_summary-errors } con error. Revise el log.| ) ) )
+        TO cs_reported-upload.
+
+    ENDLOOP.
+  ENDMETHOD.
+
+ENDCLASS.

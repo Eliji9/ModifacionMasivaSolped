@@ -1,0 +1,29 @@
+@EndUserText.label : 'Modificación masiva solped - Log'
+@AbapCatalog.enhancement.category : #NOT_EXTENSIBLE
+@AbapCatalog.tableCategory : #TRANSPARENT
+@AbapCatalog.deliveryClass : #A
+@AbapCatalog.dataMaintenance : #RESTRICTED
+define table ztmm_solped_lg {
+
+  key client            : abap.clnt not null;
+  key log_uuid          : sysuuid_x16 not null;
+  upload_uuid           : sysuuid_x16;
+  row_no                : abap.int4;
+  purchase_requisition  : abap.char(10);
+  item                  : abap.char(5);
+  acct_cat_old          : abap.char(1);
+  acct_cat_new          : abap.char(1);
+  master_fixed_asset    : abap.char(12);
+  fixed_asset           : abap.char(4);
+  company_code          : abap.char(4);
+  step                  : abap.char(1);
+  msg_type              : abap.char(1);
+  msg_origin            : abap.char(1);
+  msg_id                : abap.char(20);
+  msg_no                : abap.numc(3);
+  message               : abap.char(220);
+  local_created_by      : abp_creation_user;
+  local_created_at      : abp_creation_tstmpl;
+  local_last_changed_at : abp_locinst_lastchange_tstmpl;
+
+}

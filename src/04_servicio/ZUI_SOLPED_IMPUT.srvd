@@ -1,0 +1,5 @@
+@EndUserText.label: 'Modificación masiva solped - imputación A + activo'
+define service ZUI_SOLPED_IMPUT {
+  expose ZC_SOLPED_UP  as Upload;
+  expose ZC_SOLPED_LOG as Log;
+}

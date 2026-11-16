@@ -1,0 +1,96 @@
+@Metadata.layer: #CUSTOMER
+@UI: {
+  headerInfo: {
+    typeName: 'Mensaje',
+    typeNamePlural: 'Mensajes',
+    title: { type: #STANDARD, value: 'Message' },
+    description: { type: #STANDARD, value: 'MsgTypeText' }
+  },
+  presentationVariant: [ { sortOrder: [ { by: 'RowNo', direction: #ASC } ],
+                           visualizations: [ { type: #AS_LINEITEM } ] } ]
+}
+annotate entity ZC_SOLPED_LOG with
+{
+  @UI.facet: [
+    { id: 'Posicion', type: #FIELDGROUP_REFERENCE, targetQualifier: 'Posicion', label: 'Posición', position: 10 },
+    { id: 'Mensaje',  type: #FIELDGROUP_REFERENCE, targetQualifier: 'Mensaje',  label: 'Mensaje',  position: 20 }
+  ]
+
+  @UI.hidden: true
+  LogUuid;
+
+  @UI.hidden: true
+  UploadUuid;
+
+  @UI.lineItem: [ { position: 20, label: 'Fila' } ]
+  @UI.fieldGroup: [ { qualifier: 'Posicion', position: 10, label: 'Fila del archivo' } ]
+  RowNo;
+
+  @UI.fieldGroup: [ { qualifier: 'Posicion', position: 20, label: 'Solped' } ]
+  PurchaseRequisition;
+
+  @UI.lineItem: [ { position: 30, label: 'Posición' } ]
+  @UI.fieldGroup: [ { qualifier: 'Posicion', position: 30, label: 'Posición' } ]
+  PurchaseRequisitionItem;
+
+  @UI.lineItem: [ { position: 40, label: 'Imput. anterior' } ]
+  @UI.fieldGroup: [ { qualifier: 'Posicion', position: 40, label: 'Imputación anterior' } ]
+  AcctAssgmtCatOld;
+
+  @UI.lineItem: [ { position: 50, label: 'Imput. nueva' } ]
+  @UI.fieldGroup: [ { qualifier: 'Posicion', position: 50, label: 'Imputación nueva' } ]
+  AcctAssgmtCatNew;
+
+  @UI.lineItem: [ { position: 60, label: 'Activo fijo' } ]
+  @UI.fieldGroup: [ { qualifier: 'Posicion', position: 60, label: 'Activo fijo' } ]
+  MasterFixedAsset;
+
+  @UI.lineItem: [ { position: 70, label: 'Subnúm.' } ]
+  @UI.fieldGroup: [ { qualifier: 'Posicion', position: 70, label: 'Subnúmero' } ]
+  FixedAsset;
+
+  @UI.fieldGroup: [ { qualifier: 'Posicion', position: 80, label: 'Sociedad' } ]
+  CompanyCode;
+
+  @UI.hidden: true
+  Step;
+
+  @UI.lineItem: [ { position: 80, label: 'Paso' } ]
+  @UI.fieldGroup: [ { qualifier: 'Mensaje', position: 10, label: 'Paso' } ]
+  StepText;
+
+  @UI.hidden: true
+  MsgType;
+
+  @UI.lineItem: [ { position: 10, label: 'Estado', criticality: 'Criticality' } ]
+  @UI.fieldGroup: [ { qualifier: 'Mensaje', position: 20, label: 'Tipo de mensaje', criticality: 'Criticality' } ]
+  MsgTypeText;
+
+  @UI.hidden: true
+  Criticality;
+
+  @UI.hidden: true
+  MsgOrigin;
+
+  @UI.fieldGroup: [ { qualifier: 'Mensaje', position: 30, label: 'Origen' } ]
+  MsgOriginText;
+
+  @UI.fieldGroup: [ { qualifier: 'Mensaje', position: 40, label: 'Clase de mensaje' } ]
+  MsgId;
+
+  @UI.fieldGroup: [ { qualifier: 'Mensaje', position: 50, label: 'Número' } ]
+  MsgNo;
+
+  @UI.lineItem: [ { position: 90, label: 'Mensaje' } ]
+  @UI.fieldGroup: [ { qualifier: 'Mensaje', position: 60, label: 'Mensaje' } ]
+  Message;
+
+  @UI.fieldGroup: [ { qualifier: 'Mensaje', position: 70, label: 'Creado por' } ]
+  LocalCreatedBy;
+
+  @UI.fieldGroup: [ { qualifier: 'Mensaje', position: 80, label: 'Creado el' } ]
+  LocalCreatedAt;
+
+  @UI.hidden: true
+  LocalLastChangedAt;
+}

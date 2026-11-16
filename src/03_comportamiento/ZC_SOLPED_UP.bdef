@@ -1,0 +1,27 @@
+projection;
+strict ( 2 );
+use draft;
+use side effects;
+
+define behavior for ZC_SOLPED_UP alias Upload
+{
+  use create;
+  use update;
+  use delete;
+
+  use action simular;
+  use action procesar;
+
+  use action Edit;
+  use action Activate;
+  use action Discard;
+  use action Resume;
+  use action Prepare;
+
+  use association _Log { with draft; }
+}
+
+define behavior for ZC_SOLPED_LOG alias Log
+{
+  use association _Upload { with draft; }
+}

@@ -1,0 +1,9 @@
+CLASS zbp_r_solped_up DEFINITION
+  PUBLIC
+  ABSTRACT
+  FINAL
+  FOR BEHAVIOR OF zr_solped_up.
+ENDCLASS.
+
+CLASS zbp_r_solped_up IMPLEMENTATION.
+ENDCLASS.

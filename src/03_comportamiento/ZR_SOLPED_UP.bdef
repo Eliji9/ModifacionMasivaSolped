@@ -1,0 +1,99 @@
+managed implementation in class zbp_r_solped_up unique;
+strict ( 2 );
+with draft;
+
+define behavior for ZR_SOLPED_UP alias Upload
+persistent table ztmm_solped_up
+draft table ztmm_solped_up_d
+etag master LocalLastChangedAt
+lock master total etag LastChangedAt
+authorization master ( global )
+{
+  field ( numbering : managed, readonly ) UploadUuid;
+  field ( readonly ) PurchaseRequisition, Status, StatusText, StatusCriticality,
+                     RunMode, RunModeText, TotalItems, OkItems, ErrorItems, ProcessedAt,
+                     LocalCreatedBy, LocalCreatedAt, LocalLastChangedBy, LocalLastChangedAt, LastChangedAt;
+
+  create;
+  update;
+  delete;
+
+  // El log solo lo escribe la propia app (acciones simular / procesar)
+  association _Log { internal create; with draft; }
+
+  action ( features : instance ) simular  result [1] $self;
+  action ( features : instance ) procesar result [1] $self;
+
+  determination setInitialStatus on modify { create; }
+  validation validateFile on save { create; field FileName; }
+
+  draft action Edit;
+  draft action Activate optimized;
+  draft action Discard;
+  draft action Resume;
+  draft determine action Prepare { validation validateFile; }
+
+  side effects
+  {
+    action simular  affects entity _Log;
+    action procesar affects entity _Log;
+  }
+
+  mapping for ztmm_solped_up
+  {
+    UploadUuid          = upload_uuid;
+    PurchaseRequisition = purchase_requisition;
+    FileContent         = file_content;
+    MimeType            = mime_type;
+    FileName            = file_name;
+    Status              = status;
+    RunMode             = run_mode;
+    TotalItems          = total_items;
+    OkItems             = ok_items;
+    ErrorItems          = error_items;
+    ProcessedAt         = processed_at;
+    LocalCreatedBy      = local_created_by;
+    LocalCreatedAt      = local_created_at;
+    LocalLastChangedBy  = local_last_changed_by;
+    LocalLastChangedAt  = local_last_changed_at;
+    LastChangedAt       = last_changed_at;
+  }
+}
+
+define behavior for ZR_SOLPED_LOG alias Log
+persistent table ztmm_solped_lg
+draft table ztmm_solped_lg_d
+etag master LocalLastChangedAt
+lock dependent by _Upload
+authorization dependent by _Upload
+{
+  field ( numbering : managed, readonly ) LogUuid;
+  field ( readonly ) UploadUuid, StepText, MsgTypeText, Criticality, MsgOriginText;
+
+  internal delete;
+
+  association _Upload { with draft; }
+
+  mapping for ztmm_solped_lg
+  {
+    LogUuid                 = log_uuid;
+    UploadUuid              = upload_uuid;
+    RowNo                   = row_no;
+    PurchaseRequisition     = purchase_requisition;
+    PurchaseRequisitionItem = item;
+    AcctAssgmtCatOld        = acct_cat_old;
+    AcctAssgmtCatNew        = acct_cat_new;
+    MasterFixedAsset        = master_fixed_asset;
+    FixedAsset              = fixed_asset;
+    CompanyCode             = company_code;
+    Step                    = step;
+    MsgType                 = msg_type;
+    MsgOrigin               = msg_origin;
+    MsgId                   = msg_id;
+    MsgNo                   = msg_no;
+    Message                 = message;
+    LocalCreatedBy          = local_created_by;
+    LocalCreatedAt          = local_created_at;
+    LocalLastChangedAt      = local_last_changed_at;
+  }
+}
