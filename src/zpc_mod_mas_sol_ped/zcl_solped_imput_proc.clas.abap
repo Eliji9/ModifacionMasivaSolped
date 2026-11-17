@@ -566,8 +566,7 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
 
   METHOD build_bapi_data.
     " Como en ME52N al cambiar a A: tipo de imputación A en la posición y, en la
-    " línea de imputación 01, activo + subnúmero; se limpian centro de coste y
-    " cuenta de mayor del tipo anterior (SAP deriva la cuenta de la clase del activo).
+    " línea de imputación 01, activo + subnúmero.
     LOOP AT it_input INTO DATA(ls_input).
       APPEND VALUE #( preq_item  = ls_input-item
                       acctasscat = c_acct_cat_asset ) TO rs_data-item.
@@ -575,22 +574,20 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
                       preq_itemx = abap_true
                       acctasscat = abap_true ) TO rs_data-itemx.
 
+      " Solo activo y subnúmero, como se digita en ME52N. Cantidad, centro de
+      " coste y cuenta de mayor no se envían: SAP los deriva/ajusta al cambiar a A.
+      " (Enviar campos que SAP deriva da ME 664 "No se ha podido ejecutar la
+      " modificación ...".)
       APPEND VALUE #( preq_item  = ls_input-item
                       serial_no  = '01'
-                      quantity   = ls_input-quantity
                       asset_no   = ls_input-asset
-                      sub_number = ls_input-subnumber
-                      costcenter = space
-                      gl_account = space ) TO rs_data-account.
+                      sub_number = ls_input-subnumber ) TO rs_data-account.
       APPEND VALUE #( preq_item  = ls_input-item
                       serial_no  = '01'
                       preq_itemx = abap_true
                       serial_nox = abap_true
-                      quantity   = abap_true
                       asset_no   = abap_true
-                      sub_number = abap_true
-                      costcenter = abap_true
-                      gl_account = abap_true ) TO rs_data-accountx.
+                      sub_number = abap_true ) TO rs_data-accountx.
     ENDLOOP.
   ENDMETHOD.
 
