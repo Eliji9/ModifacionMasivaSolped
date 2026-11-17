@@ -1,26 +1,6 @@
 *"* Implementación del comportamiento de ZR_SOLPED_UP
 *"* (pestaña "Local Types" del behavior pool ZBP_R_SOLPED_UP)
 
-"! Buffer de la transacción: posiciones aprobadas por SAP en Procesar, que el
-"! saver graba con BAPI_PR_CHANGE (RAP hace el COMMIT).
-CLASS lcl_buffer DEFINITION FINAL.
-  PUBLIC SECTION.
-    TYPES:
-      BEGIN OF ty_pending,
-        upload_uuid TYPE sysuuid_x16,
-        banfn       TYPE zcl_solped_imput_proc=>ty_banfn,
-        data        TYPE zif_mm_pr_change_api=>ty_data,
-        log         TYPE zcl_solped_imput_proc=>tt_log,
-        own_errors  TYPE i,
-      END OF ty_pending,
-      tt_pending TYPE STANDARD TABLE OF ty_pending WITH EMPTY KEY.
-    CLASS-DATA mt_pending TYPE tt_pending.
-ENDCLASS.
-
-CLASS lcl_buffer IMPLEMENTATION.
-ENDCLASS.
-
-
 CLASS lhc_upload DEFINITION INHERITING FROM cl_abap_behavior_handler.
 
   PRIVATE SECTION.
@@ -29,6 +9,7 @@ CLASS lhc_upload DEFINITION INHERITING FROM cl_abap_behavior_handler.
       BEGIN OF c_status,
         new         TYPE c LENGTH 1 VALUE 'N',
         simulated   TYPE c LENGTH 1 VALUE 'S',
+        running     TYPE c LENGTH 1 VALUE 'R',
         processed   TYPE c LENGTH 1 VALUE 'P',
         with_errors TYPE c LENGTH 1 VALUE 'E',
       END OF c_status,
@@ -97,10 +78,12 @@ CLASS lhc_upload IMPLEMENTATION.
                       ( %tky             = ls_upload-%tky
                         %action-simular  = COND #( WHEN ls_upload-FileName IS INITIAL
                                                      OR ls_upload-Status = c_status-processed
+                                                     OR ls_upload-Status = c_status-running
                                                    THEN if_abap_behv=>fc-o-disabled
                                                    ELSE if_abap_behv=>fc-o-enabled )
                         %action-procesar = COND #( WHEN ls_upload-FileName IS INITIAL
                                                      OR ls_upload-Status = c_status-processed
+                                                     OR ls_upload-Status = c_status-running
                                                      OR ls_upload-%is_draft = if_abap_behv=>mk-on
                                                    THEN if_abap_behv=>fc-o-disabled
                                                    ELSE if_abap_behv=>fc-o-enabled ) ) ).
@@ -185,27 +168,35 @@ CLASS lhc_upload IMPLEMENTATION.
 
 
   METHOD procesar.
-    " Validaciones propias y deja en lcl_buffer las posiciones válidas. El saver
-    " (save_modified) llama BAPI_PR_CHANGE una sola vez, escribe el resultado por
-    " posición en el log y RAP hace el COMMIT.
-    run( it_keys = CORRESPONDING #( keys )
-         iv_test = abap_false ).
+    " La acción no modifica la solped: borra el log anterior y deja la carga
+    " "En proceso". El saver registra la operación bgPF ZCL_SOLPED_IMPUT_BGPF,
+    " que llama BAPI_PR_CHANGE con COMMIT por posición y graba el log.
+    delete_old_log( CORRESPONDING #( keys ) ).
+
+    MODIFY ENTITIES OF zr_solped_up IN LOCAL MODE
+      ENTITY Upload
+        UPDATE FIELDS ( Status RunMode TotalItems OkItems ErrorItems )
+        WITH VALUE #( FOR ls_key IN keys
+                      ( %tky       = ls_key-%tky
+                        Status     = c_status-running
+                        RunMode    = c_mode-real
+                        TotalItems = 0
+                        OkItems    = 0
+                        ErrorItems = 0 ) ).
+
+    LOOP AT keys INTO DATA(ls_key_msg).
+      " Máx. 50 caracteres, severidad informativa
+      APPEND VALUE #( %tky = ls_key_msg-%tky
+                      %msg = new_message_with_text(
+                               severity = if_abap_behv_message=>severity-information
+                               text     = `En proceso. Actualice en unos segundos` ) )
+        TO reported-upload.
+    ENDLOOP.
 
     READ ENTITIES OF zr_solped_up IN LOCAL MODE
       ENTITY Upload
         ALL FIELDS WITH CORRESPONDING #( keys )
         RESULT DATA(lt_upload).
-
-    " Mensaje resumen para el usuario (máx. 50 caracteres, severidad informativa)
-    LOOP AT lt_upload INTO DATA(ls_msg).
-      APPEND VALUE #( %tky = ls_msg-%tky
-                      %msg = new_message_with_text(
-                               severity = COND #( WHEN ls_msg-ErrorItems > 0 OR ls_msg-TotalItems = 0
-                                                  THEN if_abap_behv_message=>severity-information
-                                                  ELSE if_abap_behv_message=>severity-success )
-                               text     = |Solped { CONV string( ls_msg-PurchaseRequisition ) ALPHA = OUT } procesada. Ver log| ) )
-        TO reported-upload.
-    ENDLOOP.
 
     result = VALUE #( FOR ls_upload IN lt_upload
                       ( %tky   = ls_upload-%tky
@@ -249,19 +240,7 @@ CLASS lhc_upload IMPLEMENTATION.
                                        iv_test    = iv_test
                              IMPORTING ev_banfn   = DATA(lv_banfn)
                                        et_log     = DATA(lt_log)
-                                       es_summary = DATA(ls_summary)
-                                       es_bapi_data = DATA(ls_bapi_data)
-                                       et_pending   = DATA(lt_pending) ).
-
-      " Procesar: posiciones aprobadas para grabar en el saver
-      IF iv_test = abap_false AND ls_bapi_data-item IS NOT INITIAL.
-        DELETE lcl_buffer=>mt_pending WHERE upload_uuid = ls_upload-UploadUuid.
-        APPEND VALUE #( upload_uuid = ls_upload-UploadUuid
-                        banfn       = lv_banfn
-                        data        = ls_bapi_data
-                        log         = lt_pending
-                        own_errors  = ls_summary-errors ) TO lcl_buffer=>mt_pending.
-      ENDIF.
+                                       es_summary = DATA(ls_summary) ).
 
       DATA(lv_has_error) = xsdbool( line_exists( lt_log[ msg_type = 'E' ] ) ).
 
@@ -309,14 +288,12 @@ CLASS lhc_upload IMPLEMENTATION.
 ENDCLASS.
 
 
-"! Saver: graba con BAPI_PR_CHANGE las posiciones aprobadas en Procesar.
-"! La BAPI deja el cambio en la tarea de actualización y el COMMIT lo hace RAP
-"! (no se llama BAPI_TRANSACTION_COMMIT ni COMMIT WORK).
+"! Saver: registra el procesamiento en segundo plano (bgPF) al grabar.
+"! save_for_execution debe llamarse en la fase de grabado, nunca en la acción.
 CLASS lsc_zr_solped_up DEFINITION INHERITING FROM cl_abap_behavior_saver.
 
   PROTECTED SECTION.
     METHODS save_modified REDEFINITION.
-    METHODS cleanup_finalize REDEFINITION.
 
 ENDCLASS.
 
@@ -324,106 +301,22 @@ ENDCLASS.
 CLASS lsc_zr_solped_up IMPLEMENTATION.
 
   METHOD save_modified.
-    DATA lv_now     TYPE timestampl.
-    DATA lt_db_log  TYPE STANDARD TABLE OF ztmm_solped_lg WITH EMPTY KEY.
-
-    GET TIME STAMP FIELD lv_now.
-    DATA(lv_user) = cl_abap_context_info=>get_user_technical_name( ).
-
-    LOOP AT lcl_buffer=>mt_pending INTO DATA(ls_pending).
-      CLEAR lt_db_log.
-      DATA(ls_data) = ls_pending-data.
-
-      " Llamada real (una sola vez). La BAPI deja el cambio en la tarea de
-      " actualización y RAP hace el COMMIT.
-      DATA(lt_return) = zcl_mm_pr_change_api_fact=>create_instance( )->change(
-                          EXPORTING iv_number  = ls_pending-banfn
-                                    iv_testrun = abap_false
-                          CHANGING  cs_data    = ls_data ).
-
-      " ME 664 (no se pudo modificar un campo, p. ej. KNTTP) llega como 'I'
-      LOOP AT lt_return ASSIGNING FIELD-SYMBOL(<ls_ret>) WHERE id = 'ME' AND number = '664'.
-        <ls_ret>-type = 'E'.
-      ENDLOOP.
-
-      " Errores de cabecera: SAP no graba la solped
-      DATA(lv_header_error) = abap_false.
-      LOOP AT lt_return INTO DATA(ls_ret) WHERE type CA 'EA'
-           AND NOT ( parameter CS 'PRITEM' OR parameter CS 'PRACCOUNT' ).
-        lv_header_error = abap_true.
-        APPEND VALUE #( row_no = 1 msg_type = 'E' msg_origin = 'S'
-                        msg_id = ls_ret-id msg_no = ls_ret-number
-                        message = ls_ret-message ) TO lt_db_log.
-      ENDLOOP.
-
-      " Resultado por posición (PRITEM / PRACCOUNT, ROW = orden de envío)
-      DATA(lv_ok)  = 0.
-      DATA(lv_err) = ls_pending-own_errors.
-      LOOP AT ls_pending-log INTO DATA(ls_line).
-        DATA(lv_index) = sy-tabix.
-        DATA(lv_item_error) = lv_header_error.
-
-        LOOP AT lt_return INTO ls_ret
-             WHERE ( parameter CS 'PRITEM' OR parameter CS 'PRACCOUNT' )
-               AND row = lv_index
-               AND type CA 'EAW'.
-          IF ls_ret-type CA 'EA'.
-            lv_item_error = abap_true.
-          ENDIF.
-          DATA(ls_msg_line) = ls_line.
-          ls_msg_line-msg_type   = COND #( WHEN ls_ret-type = 'A' THEN 'E' ELSE ls_ret-type ).
-          ls_msg_line-msg_origin = 'S'.
-          ls_msg_line-msg_id     = ls_ret-id.
-          ls_msg_line-msg_no     = ls_ret-number.
-          ls_msg_line-message    = ls_ret-message.
-          APPEND CORRESPONDING #( ls_msg_line ) TO lt_db_log.
-        ENDLOOP.
-
-        ls_line-msg_origin = 'Z'.
-        IF lv_item_error = abap_true.
-          lv_err += 1.
-          ls_line-msg_type = 'E'.
-          ls_line-message  = 'No se modificó la posición (ver mensaje de SAP)'.
-        ELSE.
-          lv_ok += 1.
-          ls_line-msg_type = 'S'.
-          ls_line-message  = |Imputación cambiada de { ls_line-acct_cat_old } a A y activo | &&
-                             |{ ls_line-master_fixed_asset }-{ ls_line-fixed_asset } asignado|.
-        ENDIF.
-        APPEND CORRESPONDING #( ls_line ) TO lt_db_log.
-      ENDLOOP.
-
-      " Claves y datos administrativos del log
-      LOOP AT lt_db_log ASSIGNING FIELD-SYMBOL(<ls_db>).
-        TRY.
-            <ls_db>-log_uuid = cl_system_uuid=>create_uuid_x16_static( ).
-          CATCH cx_uuid_error.
-        ENDTRY.
-        <ls_db>-upload_uuid           = ls_pending-upload_uuid.
-        <ls_db>-purchase_requisition  = ls_pending-banfn.
-        <ls_db>-step                  = 'M'.
-        <ls_db>-local_created_by      = lv_user.
-        <ls_db>-local_created_at      = lv_now.
-        <ls_db>-local_last_changed_at = lv_now.
-      ENDLOOP.
-      INSERT ztmm_solped_lg FROM TABLE @lt_db_log.
-
-      " Resumen final de la carga
-      DATA lv_status TYPE c LENGTH 1.
-      lv_status = COND #( WHEN lv_err > 0 THEN 'E' ELSE 'P' ).
-      UPDATE ztmm_solped_up
-        SET ok_items    = @lv_ok,
-            error_items = @lv_err,
-            status      = @lv_status
-        WHERE upload_uuid = @ls_pending-upload_uuid.
+    LOOP AT update-upload INTO DATA(ls_upload)
+         WHERE %control-Status = if_abap_behv=>mk-on
+           AND Status          = 'R'.
+      TRY.
+          DATA(lo_process) = cl_bgmc_process_factory=>get_default( )->create( ).
+          lo_process->set_name( 'Modificación masiva solped' ).
+          lo_process->set_operation_tx_uncontrolled( NEW zcl_solped_imput_bgpf( ls_upload-UploadUuid ) ).
+          lo_process->save_for_execution( ).
+        CATCH cx_bgmc INTO DATA(lx_bgmc).
+          APPEND VALUE #( UploadUuid = ls_upload-UploadUuid
+                          %msg       = new_message_with_text(
+                                         severity = if_abap_behv_message=>severity-error
+                                         text     = |No se pudo iniciar el proceso: { lx_bgmc->get_text( ) }| ) )
+            TO reported-upload.
+      ENDTRY.
     ENDLOOP.
-
-    CLEAR lcl_buffer=>mt_pending.
-  ENDMETHOD.
-
-
-  METHOD cleanup_finalize.
-    CLEAR lcl_buffer=>mt_pending.
   ENDMETHOD.
 
 ENDCLASS.

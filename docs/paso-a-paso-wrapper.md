@@ -13,11 +13,11 @@ Como la BAPI no está liberada para ABAP Cloud, se encapsula en un **wrapper Tie
 | Acción | Qué hace |
 |---|---|
 | **Simular** | Validaciones propias + `BAPI_PR_CHANGE` en **modo prueba** (`TESTRUN = X`). El log muestra los mensajes reales de SAP por posición. No graba. |
-| **Procesar** | Igual que Simular (modo prueba) y además deja en memoria las posiciones **aprobadas por SAP**. Al grabar, el *saver* (`save_modified`) llama la BAPI real **solo con esas posiciones** y **RAP hace el COMMIT**. Las rechazadas quedan en el log con el mensaje real y no afectan a las demás. |
+| **Procesar** | La acción deja la carga *En proceso* y el saver registra una operación **bgPF** (`ZCL_SOLPED_IMPUT_BGPF`). En segundo plano: validaciones propias y, **por cada posición**, `BAPI_PR_CHANGE` + `BAPI_TRANSACTION_COMMIT` (o `ROLLBACK` si SAP la rechaza, incluido `ME 664`). Graba el log y el resumen. Actualizar la pantalla para ver el resultado. |
 
-Es el patrón de SAP para usar una BAPI desde RAP: la BAPI se llama en la fase de grabado
-y el COMMIT lo hace el framework. No se llama `BAPI_TRANSACTION_COMMIT` ni `COMMIT WORK`,
-y no se necesita bgPF ni configuración de Basis. El log aparece al terminar, sin actualizar.
+La BAPI no puede grabar dentro de la transacción RAP (COMMIT y AUTHORITY-CHECK prohibidos),
+por eso Procesar corre en segundo plano con bgPF. **Basis debe tener configurado bgPF**
+(`SBGRFCCONF`); monitor `SBGRFCMON`.
 
 ## Paquetes
 
@@ -35,7 +35,9 @@ y no se necesita bgPF ni configuración de Basis. El log aparece al terminar, si
 | 3 | `ZCL_MM_PR_CHANGE_API_FACT` | Clase fábrica (liberar C1) | T2 | `src/zpc_mod_mas_sol_ped_t2/zcl_mm_pr_change_api_fact.clas.abap` | Nuevo |
 | 4 | `ZCL_SOLPED_IMPUT_PROC` | Clase | T1 | `src/zpc_mod_mas_sol_ped/zcl_solped_imput_proc.clas.abap` | Modificado |
 | 5 | `ZR_SOLPED_UP` | Behavior definition | T1 | `src/zpc_mod_mas_sol_ped/zr_solped_up.bdef.asbdef` | Modificado (`with additional save`) |
-| 6 | `ZBP_R_SOLPED_UP` | Behavior pool (Local Types) | T1 | `src/zpc_mod_mas_sol_ped/zbp_r_solped_up.clas.locals_imp.abap` | Modificado (buffer + saver) |
+| 6 | `ZBP_R_SOLPED_UP` | Behavior pool (Local Types) | T1 | `src/zpc_mod_mas_sol_ped/zbp_r_solped_up.clas.locals_imp.abap` | Modificado (Procesar → En proceso; saver bgPF) |
+| 7 | `ZCL_SOLPED_IMPUT_BGPF` | Clase operación bgPF | T1 | `src/zpc_mod_mas_sol_ped/zcl_solped_imput_bgpf.clas.abap` | Nuevo |
+| 8 | `ZR_SOLPED_UP` | CDS | T1 | `src/zpc_mod_mas_sol_ped/zr_solped_up.ddls.asddls` | Modificado (estado R = En proceso) |
 
 ## Paso a paso
 
