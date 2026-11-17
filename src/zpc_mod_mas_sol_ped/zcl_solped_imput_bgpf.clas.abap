@@ -75,9 +75,9 @@ CLASS zcl_solped_imput_bgpf IMPLEMENTATION.
                                                   iv_testrun = abap_false
                                         CHANGING  cs_data    = ls_data ).
 
-    " ME 664 llega como 'I' (informativo): no bloquea el COMMIT; se muestra como advertencia
+    " ME 664 llega como 'I' pero la BAPI NO aplicó el cambio (verificado en QS4): es error
     LOOP AT lt_return ASSIGNING FIELD-SYMBOL(<ls_664>) WHERE id = 'ME' AND number = '664'.
-      <ls_664>-type = 'W'.
+      <ls_664>-type = 'E'.
     ENDLOOP.
 
       DATA(lv_error) = xsdbool( line_exists( lt_return[ type = 'E' ] ) OR line_exists( lt_return[ type = 'A' ] ) ).
