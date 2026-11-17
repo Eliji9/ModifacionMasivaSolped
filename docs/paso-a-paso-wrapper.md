@@ -13,11 +13,15 @@ Como la BAPI no está liberada para ABAP Cloud, se encapsula en un **wrapper Tie
 | Acción | Qué hace |
 |---|---|
 | **Simular** | Validaciones propias + `BAPI_PR_CHANGE` en **modo prueba** (`TESTRUN = X`). El log muestra los mensajes reales de SAP por posición. No graba. |
-| **Procesar** | La acción deja la carga *En proceso* y el saver registra una operación **bgPF** (`ZCL_SOLPED_IMPUT_BGPF`). En segundo plano: validaciones propias y, **por cada posición**, `BAPI_PR_CHANGE` + `BAPI_TRANSACTION_COMMIT` (o `ROLLBACK` si SAP la rechaza, incluido `ME 664`). Graba el log y el resumen. Actualizar la pantalla para ver el resultado. |
+| **Procesar** | La acción deja la carga *En proceso* y el saver registra una operación **bgPF** (`ZCL_SOLPED_IMPUT_BGPF`). En segundo plano: validaciones propias y **una sola llamada** a `BAPI_PR_CHANGE` con todas las posiciones válidas + `BAPI_TRANSACTION_COMMIT` (o `ROLLBACK` si SAP rechaza, incluido `ME 664`; la BAPI es todo o nada). Graba el log y el resumen. Actualizar la pantalla para ver el resultado. |
 
 La BAPI no puede grabar dentro de la transacción RAP (COMMIT y AUTHORITY-CHECK prohibidos),
 por eso Procesar corre en segundo plano con bgPF. **Basis debe tener configurado bgPF**
 (`SBGRFCCONF`); monitor `SBGRFCMON`.
+
+> **Importante:** no usar `READ ENTITIES` de `I_PurchaseRequisitionTP` antes de la BAPI. Deja la solped
+> en el buffer de MEREQ en modo visualizar (ME53N, TRTYP A) y la BAPI devuelve ME 664 para KNTTP.
+> Para leer datos usar `SELECT` a vistas CDS (`I_PurReqnAcctAssgmtAPI01`).
 
 ## Paquetes
 

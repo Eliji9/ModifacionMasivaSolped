@@ -2,8 +2,7 @@
 "! Operación no controlada del Background Processing Framework. Corre FUERA de la
 "! transacción RAP de la app, por eso aquí se permiten BAPI_PR_CHANGE con
 "! BAPI_TRANSACTION_COMMIT / ROLLBACK (vía wrapper Tier 2) y COMMIT WORK.
-"! Primero graba todas las posiciones en una sola llamada (como en SE37); si SAP
-"! rechaza, reintenta posición por posición para que las demás sí se graben.
+"! Una sola llamada a BAPI_PR_CHANGE con todas las posiciones válidas y COMMIT.
 CLASS zcl_solped_imput_bgpf DEFINITION
   PUBLIC
   FINAL
@@ -56,106 +55,58 @@ CLASS zcl_solped_imput_bgpf IMPLEMENTATION.
       APPEND CORRESPONDING #( ls_own ) TO lt_db_log.
     ENDLOOP.
 
-    " 2. BAPI_PR_CHANGE
-    "    2a. Una sola llamada con TODAS las posiciones + COMMIT (igual que la prueba
-    "        exitosa en SE37: BAPI_PR_CHANGE -> BAPI_TRANSACTION_COMMIT).
-    "    2b. Solo si 2a falla: ROLLBACK y posición por posición, para que una
-    "        posición rechazada no impida modificar las demás.
-    DATA(lo_api) = zcl_mm_pr_change_api_fact=>create_instance( ).
+    " 2. BAPI_PR_CHANGE: UNA sola llamada con todas las posiciones válidas y luego
+    "    COMMIT (o ROLLBACK si SAP devuelve error). Igual que BAPI_PR_CHANGE +
+    "    BAPI_TRANSACTION_COMMIT en SE37. La BAPI es todo o nada: si SAP rechaza,
+    "    ninguna posición de la llamada queda modificada.
     DATA(lv_ok)  = 0.
     DATA(lv_err) = ls_summary-errors.
 
     IF lt_pending IS NOT INITIAL.
-      DATA(ls_data_all) = VALUE zif_mm_pr_change_api=>ty_data(
+      DATA(lo_api) = zcl_mm_pr_change_api_fact=>create_instance( ).
+
+      DATA(ls_data) = VALUE zif_mm_pr_change_api=>ty_data(
         item     = ls_all-item
         itemx    = ls_all-itemx
         account  = ls_all-account
         accountx = ls_all-accountx ).
 
-      DATA(lt_return_all) = lo_api->change( EXPORTING iv_number  = lv_banfn
-                                                      iv_testrun = abap_false
-                                            CHANGING  cs_data    = ls_data_all ).
+      DATA(lt_return) = lo_api->change( EXPORTING iv_number  = lv_banfn
+                                                  iv_testrun = abap_false
+                                        CHANGING  cs_data    = ls_data ).
 
-      " ME 664 llega como 'I' pero significa que la BAPI NO aplicó el cambio
-      LOOP AT lt_return_all ASSIGNING FIELD-SYMBOL(<ls_664_all>) WHERE id = 'ME' AND number = '664'.
-        <ls_664_all>-type = 'E'.
+      " ME 664 llega como 'I' pero significa que la BAPI NO aplicó el cambio: es error
+      LOOP AT lt_return ASSIGNING FIELD-SYMBOL(<ls_664>) WHERE id = 'ME' AND number = '664'.
+        <ls_664>-type = 'E'.
       ENDLOOP.
 
-      DATA(lv_all_ok) = xsdbool( NOT line_exists( lt_return_all[ type = 'E' ] )
-                             AND NOT line_exists( lt_return_all[ type = 'A' ] ) ).
+      DATA(lv_error) = xsdbool( line_exists( lt_return[ type = 'E' ] ) OR line_exists( lt_return[ type = 'A' ] ) ).
 
-      IF lv_all_ok = abap_true.
-        DATA(ls_commit_all) = lo_api->commit( ).
-        IF ls_commit_all-type CA 'EA'.
-          lv_all_ok = abap_false.
-        ENDIF.
-      ELSE.
+      IF lv_error = abap_true.
         lo_api->rollback( ).
+      ELSE.
+        DATA(ls_commit) = lo_api->commit( ).
+        IF ls_commit-type CA 'EA'.
+          lv_error = abap_true.
+          APPEND ls_commit TO lt_return.
+        ENDIF.
       ENDIF.
-    ENDIF.
 
-    IF lv_all_ok = abap_true.
-      " 2a correcto: todas las posiciones quedan OK; advertencias de SAP (presupuesto, etc.)
-      LOOP AT lt_pending INTO DATA(ls_line_ok).
-        DATA(lv_idx_ok) = sy-tabix.
-        LOOP AT lt_return_all INTO DATA(ls_ret_all) WHERE type = 'W'.
-          " Mensaje ligado a una fila -> esa posición; mensaje general -> primera posición
-          IF ( ls_ret_all-row > 0 AND ls_ret_all-row <> lv_idx_ok )
-          OR ( ls_ret_all-row = 0 AND lv_idx_ok > 1 ).
-            CONTINUE.
-          ENDIF.
-          DATA(ls_msg_ok) = ls_line_ok.
-          ls_msg_ok-msg_type   = 'W'.
-          ls_msg_ok-msg_origin = 'S'.
-          ls_msg_ok-msg_id     = ls_ret_all-id.
-          ls_msg_ok-msg_no     = ls_ret_all-number.
-          ls_msg_ok-message    = ls_ret_all-message.
-          APPEND CORRESPONDING #( ls_msg_ok ) TO lt_db_log.
-        ENDLOOP.
-        lv_ok += 1.
-        ls_line_ok-msg_origin = 'Z'.
-        ls_line_ok-msg_type   = 'S'.
-        ls_line_ok-message    = |Imputación cambiada de { ls_line_ok-acct_cat_old } a A y activo | &&
-                                |{ ls_line_ok-master_fixed_asset }-{ ls_line_ok-fixed_asset } asignado|.
-        APPEND CORRESPONDING #( ls_line_ok ) TO lt_db_log.
-      ENDLOOP.
-
-    ELSE.
-      " 2b. Posición por posición, con COMMIT o ROLLBACK
       LOOP AT lt_pending INTO DATA(ls_line).
         DATA(lv_index) = sy-tabix.
-        DATA(lv_item)  = ls_all-item[ lv_index ]-preq_item.
 
-        " Datos de BAPI solo de esta posición
-        DATA(ls_data) = VALUE zif_mm_pr_change_api=>ty_data(
-          item     = VALUE #( FOR i  IN ls_all-item     WHERE ( preq_item = lv_item ) ( i ) )
-          itemx    = VALUE #( FOR ix IN ls_all-itemx    WHERE ( preq_item = lv_item ) ( ix ) )
-          account  = VALUE #( FOR a  IN ls_all-account  WHERE ( preq_item = lv_item ) ( a ) )
-          accountx = VALUE #( FOR ax IN ls_all-accountx WHERE ( preq_item = lv_item ) ( ax ) ) ).
-
-        DATA(lt_return) = lo_api->change( EXPORTING iv_number  = lv_banfn
-                                                    iv_testrun = abap_false
-                                          CHANGING  cs_data    = ls_data ).
-
-        " ME 664 llega como 'I' pero la BAPI NO aplicó el cambio: es error
-        LOOP AT lt_return ASSIGNING FIELD-SYMBOL(<ls_664>) WHERE id = 'ME' AND number = '664'.
-          <ls_664>-type = 'E'.
-        ENDLOOP.
-
-        DATA(lv_error) = xsdbool( line_exists( lt_return[ type = 'E' ] ) OR line_exists( lt_return[ type = 'A' ] ) ).
-
-        IF lv_error = abap_true.
-          lo_api->rollback( ).
-        ELSE.
-          DATA(ls_commit) = lo_api->commit( ).
-          IF ls_commit-type CA 'EA'.
-            lv_error = abap_true.
-            APPEND ls_commit TO lt_return.
-          ENDIF.
-        ENDIF.
-
-        " Mensajes de SAP de la posición (errores y advertencias)
+        " Mensajes de SAP (errores y advertencias): los que traen fila (ROW de
+        " PRITEM / PRACCOUNT) van a esa posición; los generales, a la primera.
         LOOP AT lt_return INTO DATA(ls_ret) WHERE type CA 'EAW'.
+          DATA(lv_row) = CONV i( ls_ret-row ).
+          IF ( ls_ret-parameter CS 'PRITEM' OR ls_ret-parameter CS 'PRACCOUNT' )
+             AND lv_row BETWEEN 1 AND lines( lt_pending ).
+            IF lv_row <> lv_index.
+              CONTINUE.
+            ENDIF.
+          ELSEIF lv_index > 1.
+            CONTINUE.
+          ENDIF.
           DATA(ls_msg) = ls_line.
           ls_msg-msg_type   = COND #( WHEN ls_ret-type = 'A' THEN 'E' ELSE ls_ret-type ).
           ls_msg-msg_origin = 'S'.
@@ -170,7 +121,7 @@ CLASS zcl_solped_imput_bgpf IMPLEMENTATION.
         IF lv_error = abap_true.
           lv_err += 1.
           ls_line-msg_type = 'E'.
-          ls_line-message  = 'No se modificó la posición (ver mensaje de SAP)'.
+          ls_line-message  = 'No se modificó: SAP rechazó la solped (ver mensajes de SAP)'.
         ELSE.
           lv_ok += 1.
           ls_line-msg_type = 'S'.
