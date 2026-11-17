@@ -457,19 +457,19 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
   METHOD change_items.
     DATA lt_change TYPE tt_input.
 
-    " ---- Imputación múltiple: no soportada (lectura, sin modificar) -------
-    READ ENTITIES OF i_purchaserequisitiontp
-      ENTITY PurchaseRequisitionItem BY \_PurchaseReqnAcctAssgmt
-        FIELDS ( MasterFixedAsset ) WITH VALUE #( FOR ls_in IN it_input
-                                                  ( PurchaseRequisition     = mv_banfn
-                                                    PurchaseRequisitionItem = ls_in-item ) )
-        RESULT DATA(lt_accts).
+    " ---- Imputación múltiple: no soportada -----------------------------------
+    " Se lee con la vista CDS (SELECT), NO con READ ENTITIES de I_PurchaseRequisitionTP:
+    " READ ENTITIES carga la solped en el buffer de MEREQ en modo visualizar (ME53N,
+    " TRTYP = A) y luego BAPI_PR_CHANGE reutiliza ese buffer -> todos los campos
+    " quedan solo visualización y SAP devuelve ME 664 para KNTTP.
+    SELECT PurchaseRequisitionItem, COUNT( * ) AS lines
+      FROM i_purreqnacctassgmtapi01
+      WHERE PurchaseRequisition = @mv_banfn
+      GROUP BY PurchaseRequisitionItem
+      INTO TABLE @DATA(lt_accts).
 
     LOOP AT it_input INTO DATA(ls_input).
-      DATA(lv_lines) = REDUCE i( INIT n = 0
-                                 FOR ls_a IN lt_accts
-                                 WHERE ( PurchaseRequisitionItem = ls_input-item )
-                                 NEXT n = n + 1 ).
+      DATA(lv_lines) = VALUE #( lt_accts[ PurchaseRequisitionItem = ls_input-item ]-lines OPTIONAL ).
       IF lv_lines > 1.
         add_log( is_input = ls_input
                  iv_step  = c_step-validation
