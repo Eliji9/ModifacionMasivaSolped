@@ -513,9 +513,9 @@ CLASS zcl_solped_imput_proc IMPLEMENTATION.
     " Los mensajes de posición traen PARAMETER = PRITEM / PRACCOUNT y ROW =
     " fila de esa tabla; las tablas se arman en el mismo orden que lt_change.
     DATA(lv_general_error) = abap_false.
-    " ME 664 (no se pudo modificar un campo) llega como 'I': se trata como error
+    " ME 664 llega como 'I' (informativo): no bloquea el COMMIT; se muestra como advertencia
     LOOP AT lt_return ASSIGNING FIELD-SYMBOL(<ls_664>) WHERE id = 'ME' AND number = '664'.
-      <ls_664>-type = 'E'.
+      <ls_664>-type = 'W'.
     ENDLOOP.
 
     LOOP AT lt_return INTO DATA(ls_ret) WHERE type CA 'EAW'.

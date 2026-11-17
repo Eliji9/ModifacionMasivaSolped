@@ -75,10 +75,10 @@ CLASS zcl_solped_imput_bgpf IMPLEMENTATION.
                                                   iv_testrun = abap_false
                                         CHANGING  cs_data    = ls_data ).
 
-      " ME 664 (no se pudo modificar un campo) llega como 'I': es un rechazo
-      LOOP AT lt_return ASSIGNING FIELD-SYMBOL(<ls_ret>) WHERE id = 'ME' AND number = '664'.
-        <ls_ret>-type = 'E'.
-      ENDLOOP.
+    " ME 664 llega como 'I' (informativo): no bloquea el COMMIT; se muestra como advertencia
+    LOOP AT lt_return ASSIGNING FIELD-SYMBOL(<ls_664>) WHERE id = 'ME' AND number = '664'.
+      <ls_664>-type = 'W'.
+    ENDLOOP.
 
       DATA(lv_error) = xsdbool( line_exists( lt_return[ type = 'E' ] ) OR line_exists( lt_return[ type = 'A' ] ) ).
 
